@@ -3,7 +3,8 @@
 Scheduler Research
 
 ## Simulation
-Simulation code is originated from : https://github.com/aliciayuting/NavigatorSimulator.git 
+- cluster simulation
+- worker simulation
 
 
 ## Workflow
