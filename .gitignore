@@ -10,6 +10,7 @@ __pycache__/
 **/._.DS_Store
 
 # experiment files
+*.rar
 
 # C extensions
 *.so
@@ -562,3 +563,4 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
+workflow/azuretrace/func_az_processed_trace.csv
