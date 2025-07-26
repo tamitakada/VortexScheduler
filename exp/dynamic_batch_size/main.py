@@ -1,0 +1,274 @@
+from collections import deque
+import csv
+import enum
+import json
+import logging
+import argparse
+from operator import ne
+from scheuler.dynamic_scheduler import DynamicScheduler
+from scheuler.simple_scheduler import SimpleScheduler    
+import math
+from performance import get_performance_metrics
+
+compression_factor = 0.3    # 10x compression
+log_filename = './output/simulator.log'
+
+def setup_logging(log_level_str="INFO"):
+    """Set up logging with specified level"""
+    level_map = {
+        "DEBUG": logging.DEBUG,
+        "INFO": logging.INFO,
+        "WARNING": logging.WARNING,
+        "ERROR": logging.ERROR,
+        "CRITICAL": logging.CRITICAL
+    }
+    
+    log_level = level_map.get(log_level_str.upper(), logging.INFO)
+    
+    logging.basicConfig(
+        level=log_level,
+        format='%(filename)20s:%(lineno)4d - %(levelname)8s - %(message)s',
+        handlers=[
+                logging.FileHandler(log_filename, mode='w'),
+            logging.StreamHandler()
+        ]
+    )
+    return logging.getLogger(__name__)
+
+class Event(enum.Enum):
+    CHECK_PREEMPTION = "check preemption"
+    BATCH_FINISHED = "batch finished"
+    NEW_REQS_ARRIVED = "new reqs arrived"
+
+class Request:
+    arrival_time: int
+    id: int
+    queue_time: float
+    execution_time: float
+    finish_time: float
+    batch_size: int
+    dropped_time: float
+
+    def __init__(self, arrival_time: int, id: int):
+        self.arrival_time = arrival_time
+        self.id = id
+        self.queue_time = None
+        self.dropped_time = None
+        self.execution_time = None
+        self.finish_time = None
+        self.batch_size = None
+
+    def __str__(self):
+        return f"Request(id={self.id}, arrival_time={self.arrival_time})" if self.queue_time is None else f"Request(id={self.id}, arrival_time={self.arrival_time}, queue_time={self.queue_time}, batch_size={self.batch_size}, execution_time={self.execution_time}, finish_time={self.finish_time}, dropped_time={self.dropped_time})"
+
+    def get_scheduled(self, current_time: float, batch_size: int, batch_runtime: float):
+        self.queue_time = current_time - self.arrival_time
+        self.batch_size = batch_size
+        self.execution_time = batch_runtime
+        self.finish_time = current_time + batch_runtime
+
+    def get_dropped(self, current_time: float):
+        self.dropped_time = current_time
+
+    def __repr__(self):
+        return self.__str__()
+
+
+def get_batch_duration(profile: dict, batch_size: int) -> float:
+    return profile[batch_size]
+
+
+
+queue = deque()
+future_requests = deque()
+finished_requests = []
+
+
+current_batch = deque()
+current_time = float (0)
+batch_finish_time = math.inf
+
+
+
+
+
+def fetch_new_requests(current_time: int, future_requests: deque, queue: deque):
+    new_reqs = []
+    while len(future_requests) > 0 and future_requests[0].arrival_time <= current_time:
+        req = future_requests.popleft()
+        queue.append(req)
+        new_reqs.append(req.id)
+    return new_reqs
+
+def drop_requests(current_time: int, queue: deque, finished_requests: list[Request]):
+    dropped_reqs = []
+    if len(queue) == 1 and queue[0].id == 446:
+        print(f"!!!!!!! {queue[0].id} {queue[0].arrival_time} {current_time}")
+    while len(queue) > 0 and queue[0].arrival_time + slo < current_time + base_latency:
+        req = queue.popleft()
+        req.get_dropped(current_time)
+        finished_requests.append(req)
+        dropped_reqs.append(req.id)
+
+    return dropped_reqs
+
+
+if __name__ == "__main__":
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Scheduler simulation with configurable logging')
+    parser.add_argument('--log-level', default='INFO', 
+                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'],
+                       help='Set the logging level (default: INFO)')
+    args = parser.parse_args()
+    
+    # Set up logging
+    logger = setup_logging(args.log_level)
+    logger.info(f"Starting simulation with log level: {args.log_level}")
+
+    # Read trace file
+    with open('/home/sl3343/VortexScheduler/workflow/azuretrace/llm_az_processed_trace.csv', mode='r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for idx, row in enumerate(reader):
+            arrival_time = int(row['start_timestamp_ms']) * compression_factor
+            request = Request(arrival_time, idx)
+            future_requests.append(request)
+
+        logger.info(f"Loaded {len(future_requests)} requests from the trace file")
+
+    # read batch runtime from csv
+    with open('/home/sl3343/VortexScheduler/exp/dynamic_batch_size/runtimes_by_batch_size.csv', mode='r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        batch_runtimes = {}
+        for row in reader:
+            batch_size = int(row['bsize'])
+            runtime = float(row['mean_runtime_ms'])
+            batch_runtimes[batch_size] = runtime
+    # print(f"Batch runtimes: {batch_runtimes}")
+
+    slo_factor = 5
+    base_latency = batch_runtimes[1]
+    slo = slo_factor * base_latency
+
+
+    scheduler = SimpleScheduler(max_batch_size=16)
+    # scheduler = DynamicScheduler(max_batch_size=16, slo=slo, logger=logger)
+
+    # Prepare JSON file for writing finished requests
+    json_filename = 'output/finished_reqs.json'
+    current_time = float(future_requests[0].arrival_time)
+
+    num_iters = 0;
+
+    while (True):
+
+        # check the event
+        if len(current_batch) == 0:
+            event = Event.NEW_REQS_ARRIVED
+        elif current_time == batch_finish_time:
+            event = Event.BATCH_FINISHED
+        else:
+            event = Event.CHECK_PREEMPTION
+
+        logger.info("\n" + "-"*10  +  f"Current time: {current_time}" + f" ({event.value})" + "-"*10)
+
+        # drop requests
+        drop_reqs = drop_requests(current_time, queue, finished_requests)
+        logger.info(f"[Dropped requests] {drop_reqs}")
+        
+        # fetech new reqs
+        new_reqs = fetch_new_requests(current_time, future_requests, queue)
+        logger.info(f"[New requests] {new_reqs}")
+
+        logger.info(f"[Current batch] {[req.id for req in current_batch]}")
+        logger.info(f"[Queue] {[req.id for req in queue]}")
+
+        # check if we need to do preemption
+        if (event == Event.CHECK_PREEMPTION):
+            # do something
+            logger.info(f"[Preemption] at {current_time}")
+
+        # check if the current batch is finished
+        if event == Event.BATCH_FINISHED:
+            assert len(current_batch) > 0, f"The current batch should be finished at this time but the current batch is empty."
+            req_ids = []
+            
+            while len(current_batch) > 0:
+                req = current_batch.popleft()
+                assert req.finish_time == current_time, f"The finish time of the request {req.id} is not correct."
+                req_ids.append(req.id)
+                finished_requests.append(req)
+            logger.info(f"[Batch finished] {req_ids}")
+            batch_finish_time = math.inf
+
+        # schedule the next batch
+        if event != Event.CHECK_PREEMPTION:
+            next_check_time = scheduler.schedule(current_batch, queue, current_time)
+            if len(current_batch) > 0:
+                logger.info(f"[Scheduled] {[req.id for req in current_batch]}")
+                duration = get_batch_duration(batch_runtimes, len(current_batch))
+                batch_finish_time = current_time + duration
+                # update the timestep in the current batch
+                for req in current_batch:
+                    req.get_scheduled(current_time, len(current_batch), get_batch_duration(batch_runtimes, len(current_batch)))
+            else:
+                logger.info(f"[No batch scheduled] queue length: {len(queue)}")
+
+        # check if the trace is finished
+        if len(future_requests) == 0 and len(queue) == 0 and len(current_batch) == 0:
+            logger.info("Trace finished")
+            break
+        
+        # check what is the next event
+        next_req_arrival_time = future_requests[0].arrival_time if len(future_requests) > 0 else math.inf
+        assert not (batch_finish_time==math.inf and next_check_time == math.inf and next_req_arrival_time == math.inf), f"The 3 times are all inf, which is not possible."
+        current_time = min(next_check_time, batch_finish_time, next_req_arrival_time)
+        logger.info(f"[Time] batch finish time: {batch_finish_time} next req arrival time: {next_req_arrival_time} next check time: {next_check_time}")
+
+
+        
+
+    
+
+        num_iters += 1
+
+
+        # if num_iters > 20:
+        #     break
+
+    
+
+
+        
+    # Write finished requests to JSON file
+    finished_requests_data = [req.__dict__ for req in finished_requests]
+    with open(json_filename, 'w') as jsonfile:
+        json.dump(finished_requests_data, jsonfile, indent=2)
+
+    logger.info(f"Finished requests written to {json_filename}")
+    
+
+
+
+    # Create a simple logger for performance metrics (message-only format)
+    perf_logger = logging.getLogger('performance')
+    perf_logger.setLevel(logging.INFO)
+    
+    # Create a handler that writes to the same file as the main logger
+    perf_handler = logging.FileHandler(log_filename)
+    perf_handler.setLevel(logging.INFO)
+    
+    # Create a formatter that only shows the message
+    perf_formatter = logging.Formatter('%(message)s')
+    perf_handler.setFormatter(perf_formatter)
+    
+    # Add the handler to the logger
+    perf_logger.addHandler(perf_handler)
+    
+    get_performance_metrics(finished_requests_data, slo, perf_logger)
+
+
+
+
+
+
+    

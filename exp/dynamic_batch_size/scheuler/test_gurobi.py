@@ -152,9 +152,9 @@ def solve_ilp(N, B, d):
         return None
 
 # Test parameters
-N = 19
+N = 7
 B = 16
-d = [31.28333593753632, 31.28333593753632, 31.28333593753632, 31.58333593752468, 31.883335937542142, 32.1833359375305, 32.78333593753632, 43.58333593752468, 61.28333593753632, 62.1833359375305, 63.08333593752468, 73.88333593754214, 73.88333593754214, 90.08333593752468, 90.38333593754214, 91.88333593754214, 120.08333593752468, 121.88333593754214, 122.48333593754796]
+d = [43.34546875000524, 52.94546874999651, 53.84546875000524, 53.84546875000524, 71.84546875000524, 102.74546874999942, 103.94546874999651]
 
 for bsm, runtime in batch_runtimes.items():
     print(f"bsm: {bsm} runtime: {runtime}")
@@ -191,7 +191,17 @@ if result:
         if result['s'][j] > 0:
             print(f"Position j={j} (batch size s[{j}]={result['s'][j]}):")
             for i in range(N):
-                if result["x"][(i, j)] == 1:
+                if round(result["x"][(i, j)]) == 1:
                     print(f"  Request {i} assigned to position {j}")
+
+
+
+    print(f"s[0] = {result['s'][0]}")
+    print("x[i,0] values:")
+    for i in range(N):
+        print(f"  x[{i},0] = {result['x'][(i,0)]}")
+    print(f"sum_i x[i,0] = {sum(result['x'][(i,0)] for i in range(N))}")
+
+
 else:
     print("No optimal solution found")
