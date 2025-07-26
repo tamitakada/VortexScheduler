@@ -11,8 +11,13 @@ The csv files on github is trimmed trace (currently we only upload a subset of t
 
 ```python function_rar_preprocess_trace.py```
 
-- LLM trace: https://github.com/Azure/AzurePublicDataset/blob/master/data/AzureLLMInferenceTrace_code.csv
+- LLM trace: 
 
-```python llm_csv_preprocess_trace.py ```
+    - LLM code trace: https://github.com/Azure/AzurePublicDataset/blob/master/data/AzureLLMInferenceTrace_code.csv
 
-By setting the TOP_NUM_ROWS_TO_RETRIEVE=None, it will produce the trace for all data points
+    - LLM conversation trace: https://github.com/Azure/AzurePublicDataset/blob/master/data/AzureLLMInferenceTrace_conv.csv
+
+
+        ```python llm_csv_preprocess_trace.py ```
+
+        By setting the TOP_NUM_ROWS_TO_RETRIEVE=None, it will produce the trace for all data points

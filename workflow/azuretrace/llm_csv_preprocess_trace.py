@@ -3,10 +3,14 @@ import pandas as pd
 # Download from https://github.com/Azure/AzurePublicDataset/blob/master/data/AzureLLMInferenceTrace_code.csv
 
 # File paths
-SOURCE_CSV_FILE_PATH = 'AzureLLMInferenceTrace_code_2023.csv'
-WRITE_TO_CSV_FILE_PATH = 'llm_az_processed_trace.csv'
+# SOURCE_CSV_FILE_PATH = 'AzureLLMInferenceTrace_code_2023.csv'
+# WRITE_TO_CSV_FILE_PATH = 'processed_llm_code_trace.csv'
+
+SOURCE_CSV_FILE_PATH = 'AzureLLMInferenceTrace_conv_2023.csv'
+WRITE_TO_CSV_FILE_PATH = 'processed_llm_conv_trace.csv'
+
 # Optionally trim top rows, None if no trim
-TOP_NUM_ROWS_TO_RETRIEVE = 5000
+TOP_NUM_ROWS_TO_RETRIEVE = 8000
 
 # Read the CSV
 data_frame = pd.read_csv(SOURCE_CSV_FILE_PATH)

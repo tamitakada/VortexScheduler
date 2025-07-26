@@ -8,7 +8,7 @@ import shutil
 # ===== CONFIG =====
 # Download from https://github.com/Azure/AzurePublicDataset/blob/master/data/AzureFunctionsInvocationTraceForTwoWeeksJan2021.rar
 RAR_FILE_PATH = "AzureFunctionsInvocationTraceForTwoWeeksJan2021.rar"
-OUTPUT_CSV = "func_az_processed_trace.csv"
+OUTPUT_CSV = "processed_azfunc_trace.csv"
 # Optionally trim top rows, None if no trim
 TOP_NUM_ROWS_TO_RETRIEVE = 5000
 
@@ -52,6 +52,9 @@ if {"end_timestamp", "duration"}.issubset(data_frame.columns):
     print("Added start_timestamp_ms column.")
 else:
     print("Warning: 'end_timestamp' or 'duration' column missing; cannot compute start_timestamp_ms.")
+
+# sort the data frame by start_timestamp_ms
+data_frame = data_frame.sort_values(by="start_timestamp_ms").reset_index(drop=True)
 
 if TOP_NUM_ROWS_TO_RETRIEVE:
     data_frame = data_frame.head(TOP_NUM_ROWS_TO_RETRIEVE)

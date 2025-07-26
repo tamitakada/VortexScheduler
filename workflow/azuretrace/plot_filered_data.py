@@ -5,7 +5,7 @@ import argparse
 def main():
     parser = argparse.ArgumentParser(description='Plot start_timestamp histogram from CSV')
     parser.add_argument('csv_file_path', help='Path to the CSV file')
-    parser.add_argument('--num_rows', type=int, default=5000, help='Number of rows to consider, None for all')
+    parser.add_argument('--num_rows', type=int, default=8000, help='Number of rows to consider, None for all')
     parser.add_argument('--bin_width', type=float, default=1.0, help='Bin width for histogram')
     args = parser.parse_args()
 
@@ -13,6 +13,7 @@ def main():
     data_frame = pd.read_csv(args.csv_file_path)
     data_frame['start_timestamp'] = data_frame['start_timestamp_ms'] / 1e3  # Convert from microseconds to seconds 
 
+    print(f"Loaded {len(data_frame)} rows.")
     # Take first N rows
     if args.num_rows is not None:
         data_frame = data_frame.head(args.num_rows)
@@ -31,7 +32,7 @@ def main():
     plt.hist(subset['start_timestamp'], bins=num_bins, edgecolor='black')
     plt.xlabel('timeline (s)')
     plt.ylabel('Frequency')
-    plt.title('Histogram of Azure Function Invocation Start Time Distribution')
+    plt.title('Histogram of Azure LLM Code Invocation Start Time Distribution')
     plt.show()
 
 if __name__ == '__main__':
