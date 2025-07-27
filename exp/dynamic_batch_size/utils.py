@@ -36,7 +36,16 @@ class SortedQueue:
     
     def __getitem__(self, index):
         return self.requests[index]
-    
+
+    def get_by_id(self, id):
+        """
+        Get a request by its id.
+        """
+        for req in self.requests:
+            if req.id == id:
+                return req
+        return None
+        
     def remove(self, request):
         """
         Remove a specific request from the queue.

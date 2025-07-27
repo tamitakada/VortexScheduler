@@ -17,7 +17,7 @@ class SimpleScheduler:
         self.slo = slo
         self.base_latency = base_latency
 
-    def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> bool:
+    def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, batch_finish_time: float) -> bool:
         size = len(current_batch) + len(queue)
         # copy the current batch and queue
         all_queue = queue.copy()
@@ -109,5 +109,5 @@ class SimpleScheduler:
                 queue.remove(request)
                 current_batch.append(request)
                 
-        return math.inf
+        return math.inf, None
 

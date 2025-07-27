@@ -53,29 +53,36 @@ class DynamicScheduler:
         assert batch_finish_time != math.inf, f"Batch finish time is not math.inf: {batch_finish_time}"
         
         # check the performance of finishing the current batch and schedule the remaining requests
+        self.logger.info(f"Checking the performance of finishing the current batch and schedule the remaining requests")
         queue_copy = queue.copy()
-        
-        _, future_solution = self.schedule(SortedQueue(), queue_copy, batch_finish_time)
-        future_obj = future_solution["obj"]
-        future_max_completion_time = future_solution["max_completion_time"]
-        future_num_satisfied = len(queue) + len(current_batch) - future_obj
-        assert future_num_satisfied >= 0, f"{len(queue)} + {len(current_batch)} - {future_obj} = {future_num_satisfied}"
-        future_finish_time = future_max_completion_time + batch_finish_time
+        while len(queue_copy) > 0 and queue_copy[0].arrival_time + self.slo < batch_finish_time + get_batch_duration(1):
+            queue_copy.pop()
+        if len(queue_copy) == 0:
+            future_num_satisfied = len(current_batch)
+            future_finish_time = batch_finish_time
+        else:
+            _, future_solution = self.schedule(SortedQueue(), queue_copy, batch_finish_time)
+            future_obj = future_solution["obj"]
+            future_max_completion_time = future_solution["max_completion_time"]
+            future_num_satisfied = len(current_batch) + future_obj
+            assert future_num_satisfied >= 0, f"{len(current_batch)} + {future_obj} = {future_num_satisfied}"
+            future_finish_time = future_max_completion_time + batch_finish_time
 
         # check the performance of preempting the current batch and schedule the remaining requests
+        self.logger.info(f"Checking the performance of preempting the current batch")
         preempt_batch = SortedQueue()
         queue_copy = queue.copy()
-        queue_copy.extend(current_batch)
+        queue_copy.extend(current_batch)        
         _, preempt_solution = self.schedule(preempt_batch, queue_copy, current_time)
-        preempt_num_satisfied = len(current_batch) + len(queue) - preempt_solution["obj"]
-        assert preempt_num_satisfied >= 0, f"{len(current_batch)} + {len(queue)} - {preempt_solution['obj']} = {preempt_num_satisfied}"
+        preempt_num_satisfied = preempt_solution["obj"]
+        assert preempt_num_satisfied >= 0, f"{preempt_num_satisfied}"
 
         preempt_finish_time = current_time + preempt_solution["max_completion_time"]
 
         self.logger.info(f"Preempting compare: current plan ({future_num_satisfied}, {future_finish_time}), preempt plan ({preempt_num_satisfied}, {preempt_finish_time})")
 
 
-        if preempt_num_satisfied > future_num_satisfied and preempt_finish_time < future_finish_time:
+        if preempt_num_satisfied > future_num_satisfied or (preempt_num_satisfied == future_num_satisfied and preempt_finish_time < future_finish_time):
             while len(current_batch) > 0:
                 req = current_batch.pop()
                 req.preempt()
@@ -83,7 +90,7 @@ class DynamicScheduler:
 
             for req in preempt_batch:
                 queue.remove(req)
-                req.schedule(current_time, len(current_batch), get_batch_duration(len(current_batch)))
+                req.schedule(current_time, len(preempt_batch), get_batch_duration(len(preempt_batch)))
                 current_batch.append(req)
 
             assert len(current_batch) + len(queue) == N, f"Current batch and queue size is not equal to the original size: {len(current_batch)} + {len(queue)} and {N}"
@@ -112,7 +119,7 @@ class DynamicScheduler:
             assert False, "No solution found"
     
         # Print assignments for each j
-        # self.logger.info(f"result: {result}")
+        self.logger.info(f"satisfied: {result['obj']} / {N}")
         self.logger.info("Assignments (x_{i,j} = 1):")
         for j in range(N):
             self.logger.info(f"Position j={j} (batch size s[{j}]={result['s'][j]}):")
@@ -148,8 +155,13 @@ def solve_ilp(N, B, d):
     """
     model = gp.Model("IndicatorMinimization")
 
+    for i in range(N):
+        assert d[i] >= 0, f"Deadline is negative: {d[i]}"
+
     # Suppress Gurobi output
     model.setParam('OutputFlag', 0)
+    # Set number of threads (cores) to use
+    model.setParam('Threads', 4)  # Adjust this number as needed
 
     # Variables
     x = model.addVars(N, N, vtype=GRB.BINARY, name="x")  # x_{i,j}
@@ -273,7 +285,7 @@ def solve_ilp(N, B, d):
             "e": [e[j].X for j in range(N)],
             "t": [t[i].X for i in range(N)],
             "z": [round(z[i].X) for i in range(N)],
-            "obj": round(optimal_deadline_violations),
+            "obj": N - round(optimal_deadline_violations),
             "max_completion_time": max_completion_time.X
         }
         return solution
