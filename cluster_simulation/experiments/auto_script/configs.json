@@ -35,7 +35,7 @@
             ],
             "HERD_PERIODICITY": 20000,
             "SLO_SLACK": 0.1,
-            "ENABLE_MULTITHREADING": true,
+            "ENABLE_MULTITHREADING": false,
             "ENABLE_MODEL_PREFETCH": true,
             "ENABLE_DYNAMIC_MODEL_LOADING": true,
             "ALLOCATION_STRATEGY": "HERD",

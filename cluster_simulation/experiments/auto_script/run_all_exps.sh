@@ -27,15 +27,18 @@ run_experiment() {
         -e "s/^ALLOCATION_STRATEGY = .*$/ALLOCATION_STRATEGY = '${cfg_prop_list[18]}'/" \
         -e "s/^CUSTOM_ALLOCATION = .*$/CUSTOM_ALLOCATION = ${cfg_prop_list[19]}/" \
         auto_script/config_template.py
+
+    # remove quotes
+    sed -i -e "s/'np.inf'/np.inf/g" auto_script/config_template.py
     
-    # cp auto_script/config_template.py ../core/config.py
+    cp auto_script/config_template.py ../core/config.py
 
-    # python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" > log.txt
+    python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" > log.txt
 
-    # mv log.txt $root_dir/"${cfg_prop_list[2]}"
-    # cp auto_script/config_template.py $root_dir/"${cfg_prop_list[2]}"
+    mv log.txt $root_dir/"${cfg_prop_list[2]}"
+    cp ../core/config.py $root_dir/"${cfg_prop_list[2]}"
 
-    # mv auto_script/config_template.py.bak auto_script/config_template.py
+    mv auto_script/config_template.py.bak auto_script/config_template.py
 }
 
 mkdir -p results
@@ -68,8 +71,10 @@ while read -r property; do
         fi
 
         cd $root_dir/exps/$clone_num/VortexScheduler
+        cd cluster_simulation
         source set_env.sh
-        cd cluster_simulation/experiments
+        export PYTHONPATH="${SIMULATION_DIR}"
+        cd experiments
 
         echo "Running config..."
         run_experiment "${prop_list[@]}" &
@@ -88,8 +93,10 @@ if [ "${#prop_list[@]}" -gt 0 ]; then
     echo "Current clone: $clone_num"
 
     cd $root_dir/exps/$clone_num/VortexScheduler
+    cd cluster_simulation
     source set_env.sh
-    cd cluster_simulation/experiments
+    export PYTHONPATH="${SIMULATION_DIR}"
+    cd experiments
 
     echo "Running config..."
     run_experiment "${prop_list[@]}" &
