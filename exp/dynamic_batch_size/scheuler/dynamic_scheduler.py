@@ -8,8 +8,8 @@ from gurobipy import GRB
 import logging
 
 # Set Gurobi WLS license credentials
-os.environ['GRB_WLSACCESSID'] = 'a489def3-9272-4267-beba-4ab515eb13a5'
-os.environ['GRB_WLSSECRET'] = '325c2865-d596-42bf-8576-cc8b3698bbe3'
+# os.environ['GRB_WLSACCESSID'] = 'a489def3-9272-4267-beba-4ab515eb13a5'
+# os.environ['GRB_WLSSECRET'] = '325c2865-d596-42bf-8576-cc8b3698bbe3'
 
 
 # Read batch runtime from csv
@@ -44,6 +44,9 @@ class DynamicScheduler:
         self.slo = slo
         self.max_batch_size = max_batch_size
 
+    def preempt(self, current_batch: deque, queue: deque, current_time: float) -> bool:
+        return False
+
 
     def schedule(self, current_batch: deque, queue: deque, current_time: float) -> float:
         N = len(queue)
@@ -77,14 +80,14 @@ class DynamicScheduler:
 
         remaining_req = deque()
         while len(queue) > 0:
-            req = queue.popleft()
+            req = queue.pop()
             if req.id in req_ids:
                 current_batch.append(req)
             else:
                 remaining_req.append(req)
 
         while len(remaining_req) > 0:
-            req = remaining_req.popleft()
+            req = remaining_req.pop()
             queue.append(req)
 
         
