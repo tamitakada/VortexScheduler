@@ -21,7 +21,7 @@ class HeftScheduler(Scheduler):
         task_arrival_events = [] # List to store the TaskArrivalEvent to the receiving Workers
 
         # 1. compute scheduling decisions : {task_id0->worker_id0, ...}
-        activation_graph = self._nav_heft_job_plan(job, self.simulation.workers, current_time)
+        activation_graph = self.nav_heft_job_plan(job, self.simulation.workers, current_time)
         job.assign_ADFG(activation_graph) # 2. assign the planned ADFG to job object
 
         # 3. send the first task to allocated worker
