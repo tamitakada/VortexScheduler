@@ -319,6 +319,7 @@ class Simulation(object):
 
     def run_finish(self, last_time, by_job_type=False):
         def _get_jobs_per_sec(jobs):
+            if len(jobs) == 0: return 0
             completion_time = max(j.end_time for j in jobs) - min(j.create_time for j in jobs)
             return len(jobs) / completion_time * 1000
 
@@ -355,7 +356,8 @@ class Simulation(object):
                 assert(len(self.task_drop_log) == len(set(self.task_drop_log["job_id"])))
                 stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(self.task_drop_log)
                 stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(self.task_drop_log) / \
-                    (max(j.end_time for j in completed_jobs) - min(j.create_time for j in completed_jobs)) * 1000
+                    (max(j.end_time for j in completed_jobs) - min(j.create_time for j in completed_jobs)) * 1000 \
+                    if len(completed_jobs) > 0 else 0
         
         self.sim_stats_log = stats_dict
 
