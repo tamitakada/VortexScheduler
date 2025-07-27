@@ -1,12 +1,16 @@
 import os
 import sys
 import argparse
+import json
 
 from bidict import bidict
 
 from simulations.simulation_central import *
 from simulations.simulation_decentral import *
 
+
+sys.dont_write_bytecode = True
+np.random.seed(42)
 
 # Scheduler options
 NO_SCHEDULER = 0
@@ -75,6 +79,12 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
 
     sim.task_drop_log.to_csv(os.path.join(out_path, "drop_log.csv"))
 
+    with open(os.path.join(out_path, "stats.json"), "w") as f:
+        f.write(json.dumps(sim.sim_stats_log))
+        f.close()
+
+    print("** Simulation stats saved to stats.json **")
+
     if ALLOCATION_STRATEGY == "HERD":
         os.makedirs(os.path.join(out_path, "allocations"), exist_ok=True)
         for time, alog in sim.allocation_logs:
@@ -84,9 +94,6 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
 
 
 if __name__ == "__main__":
-    sys.dont_write_bytecode = True
-    np.random.seed(42)
-
     produce_breakdown = True
     job_types = [jt for c in CLIENT_CONFIGS for jt, v in c.items() if v["NUM_JOBS"] > 0]
 

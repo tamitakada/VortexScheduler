@@ -318,60 +318,78 @@ class Simulation(object):
 
 
     def run_finish(self, last_time, by_job_type=False):
-        """
-            TODO: metrics to save
+        def _get_jobs_per_sec(jobs):
+            completion_time = max(j.end_time for j in jobs) - min(j.create_time for j in jobs)
+            return len(jobs) / completion_time * 1000
 
-            * Throughput + goodput per client per job type
-            * Median/mean/std latency per client per job type
-            * Median/mean/std latency per client per task type
-            * Median/mean/std tardiness per client per job type
-            * Drop rate per client per job type
-        """
-
-        # stats_dict = { "clients": [] } 
-        # for client in self.external_clients:
-        #     stats_dict["clients"].append({})
-        #     for job_type in client.job_types:
-        #         stats_dict["clients"][-1][job_type] = {}
+        stats_dict = { "clients": [] } 
+        for client in self.external_clients:
+            stats_dict["clients"].append({})
+            for job_type in client.job_types:
+                stats_dict["clients"][-1][job_type] = {}
                 
-        #         completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
-        #         all_completion_time = 1 # on hold
-                
-        #         stats_dict["clients"][-1][job_type]["throughput"] = len(completed_jobs) / all_completion_time
-        #         stats_dict["clients"][-1][job_type]["goodput"] = len(j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks) and j.end_time <= j.create_time + j.slo) / all_completion_time
-                
+                completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
+                stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
 
-        completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
+                if SLO_GRANULARITY == "JOB":
+                    nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
+                    stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
 
-        # 1. Get the completed job list to compute statistics 
-        completed_jobs = [j for j in self.jobs.values() if len(
-            j.completed_tasks) == len(j.tasks)]
-        print_end_jobs(last_time, completed_jobs, self.jobs)
-        # 2. Compute the metrics of interest
-        response_times = [job.end_time -
-                               job.create_time for job in completed_jobs]
-        slow_down_rate = [(job.end_time - job.create_time) /
-                               WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"] for job in completed_jobs]
-        print_response_time(response_times)
-        print_slowdown(slow_down_rate)
-        ADFG_created = []
-        for job in completed_jobs:
-            if job.ADFG not in ADFG_created:
-                ADFG_created.append(job.ADFG)
-                # print(job.job_type_id , job.ADFG)
-        print(".... number of DAG created: {}".format(len(ADFG_created)))
-        print_involved_workers(self.workers)
-        if by_job_type:
-            response_time_per_type = {}
-            slow_down_per_type = {}
-            for job in completed_jobs:
-                if job.job_type_id not in response_time_per_type:
-                    response_time_per_type[job.job_type_id] = []
-                    slow_down_per_type[job.job_type_id] = []
-                response_time_per_type[job.job_type_id].append(job.end_time - job.create_time)
-                slow_down_per_type[job.job_type_id].append((job.end_time - job.create_time) / WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"])
-            # print statistics for each job type
-            print_stats_by_job_type(response_time_per_type, slow_down_per_type)
+                    tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo) and \
+                                 j.end_time <= j.create_time + (j.slo * (1 + SLO_SLACK))]
+                    
+                    stats_dict["clients"][-1][job_type][f"jobs_within_{1+SLO_SLACK}slo_per_sec"] = _get_jobs_per_sec(nontardy_jobs + tardy_jobs)
+                    stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
+
+                    job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]
+                    stats_dict["clients"][-1][job_type]["median_tardiness_ms"] = np.median(job_tardiness)
+                    stats_dict["clients"][-1][job_type]["mean_tardiness_ms"] = np.mean(job_tardiness)
+                    stats_dict["clients"][-1][job_type]["std_tardiness_ms"] = np.std(job_tardiness)
+
+                job_latencies = [j.end_time - j.create_time for j in completed_jobs]
+
+                stats_dict["clients"][-1][job_type]["median_latency_ms"] = np.median(job_latencies)
+                stats_dict["clients"][-1][job_type]["mean_latency_ms"] = np.mean(job_latencies)
+                stats_dict["clients"][-1][job_type]["std_latency_ms"] = np.std(job_latencies)
+
+                assert(len(self.task_drop_log) == len(set(self.task_drop_log["job_id"])))
+                stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(self.task_drop_log)
+                stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(self.task_drop_log) / \
+                    (max(j.end_time for j in completed_jobs) - min(j.create_time for j in completed_jobs)) * 1000
+        
+        self.sim_stats_log = stats_dict
+
+        # completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
+
+        # # 1. Get the completed job list to compute statistics 
+        # completed_jobs = [j for j in self.jobs.values() if len(
+        #     j.completed_tasks) == len(j.tasks)]
+        # print_end_jobs(last_time, completed_jobs, self.jobs)
+        # # 2. Compute the metrics of interest
+        # response_times = [job.end_time -
+        #                        job.create_time for job in completed_jobs]
+        # slow_down_rate = [(job.end_time - job.create_time) /
+        #                        WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"] for job in completed_jobs]
+        # print_response_time(response_times)
+        # print_slowdown(slow_down_rate)
+        # ADFG_created = []
+        # for job in completed_jobs:
+        #     if job.ADFG not in ADFG_created:
+        #         ADFG_created.append(job.ADFG)
+        #         # print(job.job_type_id , job.ADFG)
+        # print(".... number of DAG created: {}".format(len(ADFG_created)))
+        # print_involved_workers(self.workers)
+        # if by_job_type:
+        #     response_time_per_type = {}
+        #     slow_down_per_type = {}
+        #     for job in completed_jobs:
+        #         if job.job_type_id not in response_time_per_type:
+        #             response_time_per_type[job.job_type_id] = []
+        #             slow_down_per_type[job.job_type_id] = []
+        #         response_time_per_type[job.job_type_id].append(job.end_time - job.create_time)
+        #         slow_down_per_type[job.job_type_id].append((job.end_time - job.create_time) / WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"])
+        #     # print statistics for each job type
+        #     print_stats_by_job_type(response_time_per_type, slow_down_per_type)
         if self.produce_breakdown:
             self.produce_time_breakdown_results(completed_jobs)
 
