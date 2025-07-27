@@ -2,6 +2,9 @@ from collections import deque
 # from main import Request
 import math
 import itertools
+from utils import SortedQueue
+
+
 class SimpleScheduler:
     max_batch_size: int
     batch_runtimes: dict
@@ -14,8 +17,35 @@ class SimpleScheduler:
         self.slo = slo
         self.base_latency = base_latency
 
+    def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> bool:
+        size = len(current_batch) + len(queue)
+        # copy the current batch and queue
+        all_queue = queue.copy()
+        all_queue.extend(current_batch)
 
-    def schedule(self, current_batch: deque, queue: deque, current_time: float) -> float:
+        new_batch = SortedQueue()
+        self.schedule(new_batch, all_queue, current_time)
+
+        if len(new_batch) < 3.03 * len(current_batch):
+            return False
+        else:
+            # preempt the current batch
+            for req in current_batch:
+                req.preempt()
+            
+            queue.extend(current_batch)
+            current_batch.clear()
+            current_batch.extend(new_batch)
+            for req in current_batch:
+                queue.remove(req)
+                req.schedule(current_time, len(current_batch), self.batch_runtimes[len(current_batch)])
+                
+            assert len(queue) + len(current_batch) == size, f"Queue and current batch size is not equal to the original size: {len(queue)} + {len(current_batch)} and {size}"
+
+            return True
+
+
+    def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
         """
         Find the largest feasible batch size where all requests can meet their latency SLOs.
         For each batch size, check all possible subsets of the queue to find a feasible subset.
@@ -36,7 +66,7 @@ class SimpleScheduler:
         best_subset = []
         
         # Convert queue to list for easier subset generation
-        queue_list = list(queue)
+        queue_list = queue.requests
         
         for batch_size in range(1, min(self.max_batch_size + 1, len(queue) + 1)):
             # Check if this batch size is feasible

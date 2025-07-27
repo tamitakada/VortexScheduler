@@ -4,11 +4,14 @@ import enum
 import json
 import logging
 import argparse
-from operator import ne
-from scheuler.dynamic_scheduler import DynamicScheduler
-from scheuler.simple_scheduler import SimpleScheduler    
+
 import math
 from performance import get_performance_metrics
+
+
+from scheuler.dynamic_scheduler import DynamicScheduler
+from scheuler.simple_scheduler import SimpleScheduler 
+from utils import SortedQueue
 
 compression_factor = 0.3    # 10x compression
 log_filename = './output/simulator.log'
@@ -61,11 +64,17 @@ class Request:
     def __str__(self):
         return f"Request(id={self.id}, arrival_time={self.arrival_time})" if self.queue_time is None else f"Request(id={self.id}, arrival_time={self.arrival_time}, queue_time={self.queue_time}, batch_size={self.batch_size}, execution_time={self.execution_time}, finish_time={self.finish_time}, dropped_time={self.dropped_time})"
 
-    def get_scheduled(self, current_time: float, batch_size: int, batch_runtime: float):
+    def schedule(self, current_time: float, batch_size: int, batch_runtime: float):
         self.queue_time = current_time - self.arrival_time
         self.batch_size = batch_size
         self.execution_time = batch_runtime
         self.finish_time = current_time + batch_runtime
+    
+    def preempt(self):
+        self.queue_time = None
+        self.batch_size = None
+        self.execution_time = None
+        self.finish_time = None
 
     def get_dropped(self, current_time: float):
         self.dropped_time = current_time
@@ -79,12 +88,12 @@ def get_batch_duration(profile: dict, batch_size: int) -> float:
 
 
 
-queue = deque()
-future_requests = deque()
+queue = SortedQueue()
+future_requests = SortedQueue()
 finished_requests = []
 
 
-current_batch = deque()
+current_batch = SortedQueue()
 current_time = float (0)
 batch_finish_time = math.inf
 
@@ -92,20 +101,18 @@ batch_finish_time = math.inf
 
 
 
-def fetch_new_requests(current_time: int, future_requests: deque, queue: deque):
+def fetch_new_requests(current_time: int, future_requests: SortedQueue, queue: SortedQueue):
     new_reqs = []
     while len(future_requests) > 0 and future_requests[0].arrival_time <= current_time:
-        req = future_requests.popleft()
+        req = future_requests.pop()
         queue.append(req)
         new_reqs.append(req.id)
     return new_reqs
 
-def drop_requests(current_time: int, queue: deque, finished_requests: list[Request]):
+def drop_requests(current_time: int, queue: SortedQueue, finished_requests: list[Request]):
     dropped_reqs = []
-    if len(queue) == 1 and queue[0].id == 446:
-        print(f"!!!!!!! {queue[0].id} {queue[0].arrival_time} {current_time}")
     while len(queue) > 0 and queue[0].arrival_time + slo < current_time + base_latency:
-        req = queue.popleft()
+        req = queue.pop()
         req.get_dropped(current_time)
         finished_requests.append(req)
         dropped_reqs.append(req.id)
@@ -150,7 +157,7 @@ if __name__ == "__main__":
     slo = slo_factor * base_latency
 
 
-    scheduler = SimpleScheduler(max_batch_size=16)
+    scheduler = SimpleScheduler(max_batch_size=16, batch_runtimes=batch_runtimes, slo=slo, base_latency=base_latency)
     # scheduler = DynamicScheduler(max_batch_size=16, slo=slo, logger=logger)
 
     # Prepare JSON file for writing finished requests
@@ -186,6 +193,12 @@ if __name__ == "__main__":
         if (event == Event.CHECK_PREEMPTION):
             # do something
             logger.info(f"[Preemption] at {current_time}")
+            do_preemption = scheduler.preempt(current_batch, queue, current_time)
+            if do_preemption:
+                logger.info(f"[New scheduled batch] {[req.id for req in current_batch]}")
+                duration = get_batch_duration(batch_runtimes, len(current_batch))
+                batch_finish_time = current_time + duration
+
 
         # check if the current batch is finished
         if event == Event.BATCH_FINISHED:
@@ -193,7 +206,7 @@ if __name__ == "__main__":
             req_ids = []
             
             while len(current_batch) > 0:
-                req = current_batch.popleft()
+                req = current_batch.pop()
                 assert req.finish_time == current_time, f"The finish time of the request {req.id} is not correct."
                 req_ids.append(req.id)
                 finished_requests.append(req)
@@ -209,7 +222,7 @@ if __name__ == "__main__":
                 batch_finish_time = current_time + duration
                 # update the timestep in the current batch
                 for req in current_batch:
-                    req.get_scheduled(current_time, len(current_batch), get_batch_duration(batch_runtimes, len(current_batch)))
+                    req.schedule(current_time, len(current_batch), get_batch_duration(batch_runtimes, len(current_batch)))
             else:
                 logger.info(f"[No batch scheduled] queue length: {len(queue)}")
 
