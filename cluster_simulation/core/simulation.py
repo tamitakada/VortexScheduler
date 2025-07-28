@@ -353,9 +353,8 @@ class Simulation(object):
                 stats_dict["clients"][-1][job_type]["mean_latency_ms"] = np.mean(job_latencies)
                 stats_dict["clients"][-1][job_type]["std_latency_ms"] = np.std(job_latencies)
 
-                assert(len(self.task_drop_log) == len(set(self.task_drop_log["job_id"])))
-                stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(self.task_drop_log)
-                stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(self.task_drop_log) / \
+                stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(set(self.task_drop_log["job_id"]))
+                stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(set(self.task_drop_log["job_id"])) / \
                     (max(j.end_time for j in completed_jobs) - min(j.create_time for j in completed_jobs)) * 1000 \
                     if len(completed_jobs) > 0 else 0
         
