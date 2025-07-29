@@ -33,7 +33,7 @@ run_experiment() {
     
     cp auto_script/config_template.py ../core/config.py
 
-    python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" > log.txt
+    python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" &> log.txt
 
     mv log.txt $root_dir/"${cfg_prop_list[2]}"
     cp ../core/config.py $root_dir/"${cfg_prop_list[2]}"
@@ -65,7 +65,7 @@ while read -r property; do
         clone_num=$((i % 5 + 1))
         echo "Current clone: $clone_num"
 
-        if [[ "$clone_num" -eq "0" && "$i" -ne "0" ]]; then
+        if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then
             echo "Waiting for previous to finish..."
             wait
         fi
