@@ -103,7 +103,7 @@ class HeftTaskWorker(TaskWorker):
                 events += batch_end_events
         else:
             all_task_types = get_task_types(self.simulation.job_types_list)
-            self.next_task_type_idx = all_task_types.index(task_type)
+            # self.next_task_type_idx = all_task_types.index(task_type)
             task_types_left = len(all_task_types)
             batch_end_events = []
             while not batch_end_events and task_types_left:
