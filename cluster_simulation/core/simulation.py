@@ -327,9 +327,11 @@ class Simulation(object):
         for client in self.external_clients:
             stats_dict["clients"].append({})
             for job_type in client.job_types:
-                stats_dict["clients"][-1][job_type] = {}
+                stats_dict["clients"][-1][job_type] = {
+                    "client_id": client.id, 
+                    "slo": client.per_job_config[job_type]["SLO"] if "SLO" in client.per_job_config[job_type] else -1}
                 
-                completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
+                completed_jobs = [j for j in self.jobs.values() if j.client_id == client.id and len(j.completed_tasks) == len(j.tasks)]
                 stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
 
                 if SLO_GRANULARITY == "JOB":
