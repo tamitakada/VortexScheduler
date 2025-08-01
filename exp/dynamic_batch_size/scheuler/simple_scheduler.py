@@ -9,13 +9,13 @@ class SimpleScheduler:
     max_batch_size: int
     batch_runtimes: dict
     slo: float
-    base_latency: float
+    # base_latency: float
 
-    def __init__(self, max_batch_size: int, batch_runtimes: dict, slo: float, base_latency: float):
+    def __init__(self, max_batch_size: int, batch_runtimes: dict):
         self.max_batch_size = max_batch_size
         self.batch_runtimes = batch_runtimes
-        self.slo = slo
-        self.base_latency = base_latency
+        # self.slo = slo
+        # self.base_latency = base_latency
 
     def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, batch_finish_time: float) -> bool:
         size = len(current_batch) + len(queue)
@@ -26,7 +26,8 @@ class SimpleScheduler:
         new_batch = SortedQueue()
         self.schedule(new_batch, all_queue, current_time)
 
-        if len(new_batch) < 3.03 * len(current_batch):
+        # if len(new_batch) < 3.03 * len(current_batch):
+        if len(new_batch) < 1.5 * len(current_batch):
             return False
         else:
             # preempt the current batch
@@ -86,7 +87,7 @@ class SimpleScheduler:
                     request_finish_time = current_time + batch_duration
                     
                     # Check SLO violation: arrival_time + slo < finish_time
-                    if request.arrival_time + self.slo < request_finish_time:
+                    if request.deadline < request_finish_time:
                         subset_feasible = False
                         break
                 
@@ -111,3 +112,22 @@ class SimpleScheduler:
                 
         return math.inf, None
 
+    def offline_schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, finished_reqs: list) -> float:
+        cumulated_latency = 0
+        num_batch = 0
+        while len(queue) > 0:
+            self.logger.info(f"####### Batch: {num_batch} Time: {cumulated_latency} #######")
+            self.schedule(current_batch, queue, current_time)
+            batch_time = self.batch_runtimes[len(current_batch)]
+            deadline = {req.id: req.deadline - cumulated_latency for req in current_batch}
+            self.logger.info(f"deadline: {deadline}")
+            while len(current_batch) > 0:
+                req = current_batch.pop()
+                finished_reqs.append(req)
+                self.logger.info(f"\tRequest {req.id}: time remaining: {req.deadline - cumulated_latency}")
+            cumulated_latency += batch_time
+            num_batch += 1
+
+            self.logger.info(f"--------------------------------")
+
+        return current_time

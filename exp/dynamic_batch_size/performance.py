@@ -136,7 +136,7 @@ def analyze_queue_time(requests, logger):
     logger.info(f"99th percentile queue time: {np.percentile(queue_times, 99):.3f} ms")
     logger.info(f"Maximum queue time: {np.max(queue_times):.3f} ms")
 
-def analyze_slo_satisfaction(requests, slo_threshold, logger):
+def analyze_slo_satisfaction(requests, logger):
     """Analyze SLO satisfaction rates for a fixed SLO threshold"""
     logger.info("="*60)
     logger.info("SLO SATISFACTION ANALYSIS")
@@ -150,8 +150,7 @@ def analyze_slo_satisfaction(requests, slo_threshold, logger):
     
     for req in requests:
         if req['dropped_time'] is None:
-            actual_latency = req['finish_time'] - req['arrival_time']
-            if actual_latency <= slo_threshold:
+            if req['finish_time']  <= req['deadline']:
                 satisfied += 1
             else:
                 not_satisfied += 1
@@ -172,11 +171,11 @@ def analyze_slo_satisfaction(requests, slo_threshold, logger):
     logger.info(f"{'Dropped':<20} {dropped:<10} {dropped_percentage:<11.1f}")
     logger.info(f"{'Total':<20} {total:<10} {'100.0':<12}")
     logger.info("-" * 42)
-    logger.info(f"SLO Threshold: {slo_threshold} ms")
+    # logger.info(f"SLO Threshold: {slo_threshold} ms")
 
 
 
-def get_performance_metrics(requests, slo_threshold, logger):
+def get_performance_metrics(requests, logger):
     """Main function to run the performance analysis"""
     logger.info("="*50)    
     logger.info("PERFORMANCE ANALYSIS")
@@ -198,7 +197,7 @@ def get_performance_metrics(requests, slo_threshold, logger):
     
     # Analyze SLO satisfaction with a fixed SLO threshold
     # slo_threshold = 100.0  # 100ms SLO threshold - you can modify this value
-    analyze_slo_satisfaction(requests, slo_threshold, logger)
+    analyze_slo_satisfaction(requests, logger)
     
 
     

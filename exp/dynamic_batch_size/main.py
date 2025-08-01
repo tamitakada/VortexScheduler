@@ -1,6 +1,7 @@
 from collections import deque
 import csv
 import enum
+from hmac import new
 import json
 import logging
 import argparse
@@ -15,7 +16,9 @@ from utils import SortedQueue
 from vary_trace import *
 
 
-def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, trace_variation="", slo_factor=None, max_batch_size=None):
+batch_runtimes = {}
+
+def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, trace_variation="", slo_factor=None, max_batch_size=None, output_file=None):
     """Set up logging with specified level"""
     level_map = {
         "DEBUG": logging.DEBUG,
@@ -28,11 +31,16 @@ def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, tra
     log_level = level_map.get(log_level_str.upper(), logging.INFO)
     
     # Create log filename based on scheduler name, preemption, trace variation, slo factor, and max batch size
-    preemption_suffix = "-preemption" if preemption else ""
-    trace_suffix = f"-{trace_variation}" if trace_variation else ""
-    slo_suffix = f"-slo-{slo_factor}" if slo_factor is not None else ""
-    batch_suffix = f"-batch-{max_batch_size}" if max_batch_size is not None else ""
-    log_filename = f'./output/{scheduler_name}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
+    if output_file:
+        # If output_file is provided, use it as the base name
+        log_filename = f'./output/{output_file}.log'
+    else:
+        # Use the current naming convention
+        preemption_suffix = "-preemption" if preemption else ""
+        trace_suffix = f"-{trace_variation}" if trace_variation else ""
+        slo_suffix = f"-slo-{slo_factor}" if slo_factor is not None else ""
+        batch_suffix = f"-batch-{max_batch_size}" if max_batch_size is not None else ""
+        log_filename = f'./output/{scheduler_name}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
     
     logging.basicConfig(
         level=log_level,
@@ -69,10 +77,10 @@ class Request:
         self.finish_time = None
         self.batch_size = None
         self.slo_factor = slo_factor
-        self.deadline = self.arrival_time + self.slo_factor * get_batch_duration(batch_runtimes, 1)
+        self.deadline = self.arrival_time + self.slo_factor * batch_runtimes[1]
 
     def __str__(self):
-        return f"Request(id={self.id}, arrival_time={self.arrival_time})" if self.queue_time is None else f"Request(id={self.id}, arrival_time={self.arrival_time}, queue_time={self.queue_time}, batch_size={self.batch_size}, execution_time={self.execution_time}, finish_time={self.finish_time}, dropped_time={self.dropped_time})"
+        return f"Request(id={self.id}, arrival_time={self.arrival_time}, slo_factor={self.slo_factor}, deadline={self.deadline})" if self.queue_time is None else f"Request(id={self.id}, arrival_time={self.arrival_time}, slo_factor={self.slo_factor}, deadline={self.deadline}, queue_time={self.queue_time}, batch_size={self.batch_size}, execution_time={self.execution_time}, finish_time={self.finish_time}, dropped_time={self.dropped_time})"
 
     def schedule(self, current_time: float, batch_size: int, batch_runtime: float):
         self.queue_time = current_time - self.arrival_time
@@ -93,10 +101,6 @@ class Request:
         return self.__str__()
 
 
-def get_batch_duration(profile: dict, batch_size: int) -> float:
-    return profile[batch_size]
-
-
 
 queue = SortedQueue()
 future_requests = SortedQueue()
@@ -112,6 +116,7 @@ batch_finish_time = math.inf
 
 
 def fetch_new_requests(current_time: int, future_requests: SortedQueue, queue: SortedQueue):
+    
     new_reqs = []
     while len(future_requests) > 0 and future_requests[0].arrival_time <= current_time:
         req = future_requests.pop()
@@ -121,7 +126,7 @@ def fetch_new_requests(current_time: int, future_requests: SortedQueue, queue: S
 
 def drop_requests(current_time: int, queue: SortedQueue, finished_requests: list[Request]):
     dropped_reqs = []
-    while len(queue) > 0 and queue[0].arrival_time + slo < current_time + base_latency:
+    while len(queue) > 0 and queue[0].deadline < current_time + batch_runtimes[1]:
         req = queue.pop()
         req.get_dropped(current_time)
         finished_requests.append(req)
@@ -150,9 +155,15 @@ if __name__ == "__main__":
                        help='SLO factor multiplier for base latency (default: 5.0)')
     parser.add_argument('--max-batch-size', type=int, default=16,
                        help='Maximum batch size for scheduling (default: 16)')
+    parser.add_argument('--offline-num-reqs', type=int, default=0,
+                    help='Number of requests to simulate in the offline setting (default: 0)')
+    parser.add_argument('--output-file', type=str, default=None,
+                       help='Custom output filename for logging (default: scheduler_name-preemption-trace_variation-slo_factor-max_batch_size.log)')
     args = parser.parse_args()
     
+    
     # Validate scheduler name
+
     if args.scheduler not in ['simple', 'dynamic']:
         print(f"Error: Invalid scheduler name '{args.scheduler}'. Must be 'simple' or 'dynamic'.")
         exit(1)
@@ -179,11 +190,21 @@ if __name__ == "__main__":
         trace_variation = f"multi-user-{args.num_user}"
     
     # Set up logging with scheduler name, preemption info, trace variation, slo factor, and max batch size
-    logger = setup_logging(args.log_level, args.scheduler, args.preemption, trace_variation, args.slo_factor, args.max_batch_size)
+    logger = setup_logging(args.log_level, args.scheduler, args.preemption, trace_variation, args.slo_factor, args.max_batch_size, args.output_file)
     logger.info(f"Starting simulation with scheduler: {args.scheduler}, preemption: {args.preemption}, trace_variation: {trace_variation}, slo_factor: {args.slo_factor}, max_batch_size: {args.max_batch_size}, log level: {args.log_level}")
 
+    
+    # read throughput profile
+    with open('./runtimes_by_batch_size.csv', mode='r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            batch_size = int(row['bsize'])
+            runtime = float(row['mean_runtime_ms'])
+            batch_runtimes[batch_size] = runtime
+    # print(f"Batch runtimes: {batch_runtimes}")
+    
     # Read trace file
-    trace_file_path = '/home/sl3343/VortexScheduler/workflow/azuretrace/llm_az_processed_trace.csv'
+    trace_file_path = '../../workflow/azuretrace/llm_az_processed_trace.csv'
     if args.vary_trace == 'compress':
         arrival_times = generate_trace_with_simple_compression(trace_file_path, args.compress_ratio)
         logger.info(f"Generated compressed trace with ratio: {args.compress_ratio}")
@@ -196,43 +217,54 @@ if __name__ == "__main__":
     
     # Create requests from arrival times
     for i, arrival_time in enumerate(arrival_times):
-        request = Request(arrival_time, i)
+        # random sample a slo factor between 1.5 and 5.0
+        # slo_factor = random.uniform(2, 25)
+        slo_factor = args.slo_factor
+        request = Request(arrival_time, i, slo_factor)
         future_requests.append(request)
     
     logger.info(f"Loaded {len(future_requests)} requests from the trace file")
 
-    # read batch runtime from csv
-    with open('/home/sl3343/VortexScheduler/exp/dynamic_batch_size/runtimes_by_batch_size.csv', mode='r', newline='') as csvfile:
-        reader = csv.DictReader(csvfile)
-        batch_runtimes = {}
-        for row in reader:
-            batch_size = int(row['bsize'])
-            runtime = float(row['mean_runtime_ms'])
-            batch_runtimes[batch_size] = runtime
-    # print(f"Batch runtimes: {batch_runtimes}")
 
-    slo_factor = args.slo_factor
-    base_latency = batch_runtimes[1]
-    slo = slo_factor * base_latency
+
+    # slo_factor = args.slo_factor
+    # base_latency = batch_runtimes[1]
+    # slo = slo_factor * base_latency
 
     # Initialize scheduler based on command line arguments
     if args.scheduler == 'simple':
-        scheduler = SimpleScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, slo=slo, base_latency=base_latency)
+        scheduler = SimpleScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes)
     elif args.scheduler == 'dynamic':
-        scheduler = DynamicScheduler(max_batch_size=args.max_batch_size, slo=slo, logger=logger)
+        scheduler = DynamicScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
     else:
         logger.error(f"Invalid scheduler name: {args.scheduler}")
         exit(1)
 
     # Prepare JSON file for writing finished requests
-    preemption_suffix = "-preemption" if args.preemption else ""
-    trace_suffix = f"-{trace_variation}" if trace_variation else ""
-    slo_suffix = f"-slo-{args.slo_factor}"
-    batch_suffix = f"-batch-{args.max_batch_size}"
-    json_filename = f'output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}_finished_reqs.json'
+    if args.output_file:
+        # If output_file is provided, use it as the base name
+        json_filename = f'output/{args.output_file}_finished_reqs.json'
+    else:
+        # Use the current naming convention
+        preemption_suffix = "-preemption" if args.preemption else ""
+        trace_suffix = f"-{trace_variation}" if trace_variation else ""
+        slo_suffix = f"-slo-{args.slo_factor}"
+        batch_suffix = f"-batch-{args.max_batch_size}"
+        json_filename = f'output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}_finished_reqs.json'
     current_time = float(future_requests[0].arrival_time)
 
     num_iters = 0;
+
+    # po
+    if args.offline_num_reqs > 0:
+        num_reqs = 0
+        while num_reqs < args.offline_num_reqs and len(future_requests) > 0:
+            req = future_requests.pop()
+            queue.append(req)
+            num_reqs += 1
+        logger.info(f"[New requests] {num_reqs}")
+
+
 
     while (True):
 
@@ -251,11 +283,14 @@ if __name__ == "__main__":
         logger.info(f"[Dropped requests] {drop_reqs}")
         
         # fetech new reqs
-        new_reqs = fetch_new_requests(current_time, future_requests, queue)
-        logger.info(f"[New requests] {new_reqs}")
+        new_reqs = fetch_new_requests(current_time, future_requests, queue
+        )
+        if len(new_reqs) > 0:
+            logger.info(f"[New requests] {new_reqs}")
 
         logger.info(f"[Current batch] {[req.id for req in current_batch]}")
         logger.info(f"[Queue] {[req.id for req in queue]}")
+        # logger.info(f"[Queue] {queue.requests}")
 
         # check if we need to do preemption
         if (event == Event.CHECK_PREEMPTION and args.preemption):
@@ -264,7 +299,7 @@ if __name__ == "__main__":
             do_preemption = scheduler.preempt(current_batch, queue, current_time, batch_finish_time)
             if do_preemption:
                 logger.info(f"[New scheduled batch] {[req.id for req in current_batch]}")
-                duration = get_batch_duration(batch_runtimes, len(current_batch))
+                duration = batch_runtimes[len(current_batch)]
                 batch_finish_time = current_time + duration
 
 
@@ -286,11 +321,11 @@ if __name__ == "__main__":
             next_check_time, _ = scheduler.schedule(current_batch, queue, current_time)
             if len(current_batch) > 0:
                 logger.info(f"[Scheduled] {[req.id for req in current_batch]}")
-                duration = get_batch_duration(batch_runtimes, len(current_batch))
+                duration = batch_runtimes[len(current_batch)]
                 batch_finish_time = current_time + duration
                 # update the timestep in the current batch
                 for req in current_batch:
-                    req.schedule(current_time, len(current_batch), get_batch_duration(batch_runtimes, len(current_batch)))
+                    req.schedule(current_time, len(current_batch), batch_runtimes[len(current_batch)])
             else:
                 logger.info(f"[No batch scheduled] queue length: {len(queue)}")
 
@@ -306,10 +341,6 @@ if __name__ == "__main__":
         logger.info(f"[Time] batch finish time: {batch_finish_time} next req arrival time: {next_req_arrival_time} next check time: {next_check_time}")
 
 
-        
-
-    
-
         num_iters += 1
 
 
@@ -317,9 +348,6 @@ if __name__ == "__main__":
         #     break
 
     
-
-
-        
     # Write finished requests to JSON file
     finished_requests_data = [req.__dict__ for req in finished_requests]
     with open(json_filename, 'w') as jsonfile:
@@ -335,11 +363,16 @@ if __name__ == "__main__":
     perf_logger.setLevel(logging.INFO)
     
     # Create a handler that writes to the same file as the main logger
-    preemption_suffix = "-preemption" if args.preemption else ""
-    trace_suffix = f"-{trace_variation}" if trace_variation else ""
-    slo_suffix = f"-slo-{args.slo_factor}"
-    batch_suffix = f"-batch-{args.max_batch_size}"
-    perf_log_filename = f'./output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
+    if args.output_file:
+        # If output_file is provided, use it as the base name
+        perf_log_filename = f'./output/{args.output_file}.log'
+    else:
+        # Use the current naming convention
+        preemption_suffix = "-preemption" if args.preemption else ""
+        trace_suffix = f"-{trace_variation}" if trace_variation else ""
+        slo_suffix = f"-slo-{args.slo_factor}"
+        batch_suffix = f"-batch-{args.max_batch_size}"
+        perf_log_filename = f'./output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
     perf_handler = logging.FileHandler(perf_log_filename)
     perf_handler.setLevel(logging.INFO)
     
@@ -350,7 +383,7 @@ if __name__ == "__main__":
     # Add the handler to the logger
     perf_logger.addHandler(perf_handler)
     
-    get_performance_metrics(finished_requests_data, slo, perf_logger)
+    get_performance_metrics(finished_requests_data, perf_logger)
 
 
 

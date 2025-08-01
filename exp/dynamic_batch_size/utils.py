@@ -13,8 +13,8 @@ class SortedQueue:
         """
         # Find the insertion point to maintain sorted order
         # Create a list of arrival times for comparison
-        arrival_times = [req.arrival_time for req in self.requests]
-        insert_pos = bisect.bisect_right(arrival_times, request.arrival_time)
+        deadlines = [req.deadline for req in self.requests]
+        insert_pos = bisect.bisect_right(deadlines, request.deadline)
         self.requests.insert(insert_pos, request)
     
     def pop(self):

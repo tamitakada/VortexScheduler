@@ -8,26 +8,6 @@ from gurobipy import GRB
 import logging
 from utils import SortedQueue
 
-# Set Gurobi WLS license credentials
-# os.environ['GRB_WLSACCESSID'] = 'a489def3-9272-4267-beba-4ab515eb13a5'
-# os.environ['GRB_WLSSECRET'] = '325c2865-d596-42bf-8576-cc8b3698bbe3'
-
-
-# Read batch runtime from csv
-with open('/home/sl3343/VortexScheduler/exp/dynamic_batch_size/runtimes_by_batch_size.csv', mode='r', newline='') as csvfile:
-    reader = csv.DictReader(csvfile)
-    batch_runtimes = {}
-    for row in reader:
-        batch_size = int(row['bsize'])
-        runtime = float(row['mean_runtime_ms'])
-        batch_runtimes[batch_size] = runtime
-
-
-def get_batch_duration(s_k):
-    """Function f that maps batch size to runtime"""
-    return batch_runtimes.get(s_k, 0)
-
-
 
 class DynamicScheduler:
     max_batch_size: int
@@ -35,7 +15,7 @@ class DynamicScheduler:
     slo: float
     current_soltion: dict
 
-    def __init__(self, max_batch_size: int, slo: float, logger=None):
+    def __init__(self, max_batch_size: int, batch_runtimes: dict, logger=None):
         # Use the logger passed from main, or create one for this module
         if logger is not None:
             self.logger = logger
@@ -43,9 +23,14 @@ class DynamicScheduler:
             # Use the same logger name as main.py to inherit the configuration
             self.logger = logging.getLogger('__main__')
 
-        self.slo = slo
+        # self.slo = slo
         self.max_batch_size = max_batch_size
         self.current_solution = None
+        self.batch_runtimes = batch_runtimes
+
+    def get_batch_duration(self, s_k):
+        """Function f that maps batch size to runtime"""
+        return self.batch_runtimes.get(s_k, 0)
 
     def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, batch_finish_time: float) -> bool:
         N = len(queue) + len(current_batch)
@@ -55,7 +40,7 @@ class DynamicScheduler:
         # check the performance of finishing the current batch and schedule the remaining requests
         self.logger.info(f"Checking the performance of finishing the current batch and schedule the remaining requests")
         queue_copy = queue.copy()
-        while len(queue_copy) > 0 and queue_copy[0].arrival_time + self.slo < batch_finish_time + get_batch_duration(1):
+        while len(queue_copy) > 0 and queue_copy[0].deadline < batch_finish_time + self.get_batch_duration(1):
             queue_copy.pop()
         if len(queue_copy) == 0:
             future_num_satisfied = len(current_batch)
@@ -90,7 +75,7 @@ class DynamicScheduler:
 
             for req in preempt_batch:
                 queue.remove(req)
-                req.schedule(current_time, len(preempt_batch), get_batch_duration(len(preempt_batch)))
+                req.schedule(current_time, len(preempt_batch), self.get_batch_duration(len(preempt_batch)))
                 current_batch.append(req)
 
             assert len(current_batch) + len(queue) == N, f"Current batch and queue size is not equal to the original size: {len(current_batch)} + {len(queue)} and {N}"
@@ -103,29 +88,33 @@ class DynamicScheduler:
     def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
         N = len(queue)
         B = self.max_batch_size
-        d = [request.arrival_time + self.slo - current_time for request in queue]
-
-        self.logger.info(f"d: {d}")
-        self.logger.info(f"base latency: {batch_runtimes}")
+        req_deadlines = {req.id: req.deadline - current_time for req in queue}
+        d = list(req_deadlines.values())
+        self.logger.info(f"deadline: {req_deadlines}")
+        self.logger.info(f"base latency: {self.batch_runtimes}")
         
         assert (len(current_batch) == 0, f"Without preemption, schedule should only happen when the current batch is finished (current_batch_size: {len(current_batch)})")
 
         if N == 0:
             return math.inf, None
 
-        result = solve_ilp(N, B, d)
+        result = solve_ilp(N, B, d, self.batch_runtimes)
 
         if result is None:
             assert False, "No solution found"
     
         # Print assignments for each j
-        self.logger.info(f"satisfied: {result['obj']} / {N}")
-        self.logger.info("Assignments (x_{i,j} = 1):")
+        self.logger.info(f"satisfied: {result['obj']} / {N}, max completion time: {result['max_completion_time']}")
+        cumulated_latency = 0
         for j in range(N):
-            self.logger.info(f"Position j={j} (batch size s[{j}]={result['s'][j]}):")
+            batsh_size = result['s'][j]
+            batch_latency = self.batch_runtimes.get(batsh_size, 0)
+            self.logger.info(f"Position j={j} (batch size s[{j}]={result['s'][j]}), cumulated latency = {cumulated_latency}, batch_finish_time = {batch_latency}")
             for i in range(N):
                 if result["x"][(i, j)] == 1:
-                    self.logger.info(f"  Request {queue[i].id} assigned to position {j}")
+                    self.logger.info(f"\tRequest {queue[i].id}: time remaining: {queue[i].deadline - current_time - cumulated_latency}")
+            cumulated_latency += batch_latency
+
 
         req_ids = set([queue[i].id for i in range(N) if result["x"][(i,0)] == 1])
 
@@ -143,7 +132,7 @@ class DynamicScheduler:
         return math.inf, result
 
 
-def solve_ilp(N, B, d):
+def solve_ilp(N, B, d, batch_runtimes):
     """
     Solve the ILP:
     min sum_i Ind{d_i < t_i}
@@ -172,7 +161,7 @@ def solve_ilp(N, B, d):
     # position_used = model.addVars(N, vtype=GRB.BINARY, name="position_used")  # position_used[j] = 1 if s[j] > 0
 
     # Big-M value for indicator constraints
-    M = max(d) + sum(get_batch_duration(s_val) for s_val in range(B + 1)) * N
+    M = max(d) + sum(batch_runtimes.get(s_val, 0) for s_val in range(B + 1)) * N
 
     # Constraint 1: sum_j x_{i,j} <= 1, forall i (allow not scheduling)
     for i in range(N):
@@ -209,11 +198,11 @@ def solve_ilp(N, B, d):
         # e_j = sum_{k=1}^j f(s_k) = cumulative sum of batch runtimes
         if j == 0:
             # e[0] = f(s[0])
-            model.addConstr(e[j] == gp.quicksum(get_batch_duration(batch_size) * indicators[batch_size] for batch_size in range(B + 1)), 
+            model.addConstr(e[j] == gp.quicksum(batch_runtimes.get(batch_size,0) * indicators[batch_size] for batch_size in range(B + 1)), 
                         name=f"e_{j}")
         else:
             # e[j] = e[j-1] + f(s[j])
-            model.addConstr(e[j] == e[j-1] + gp.quicksum(get_batch_duration(batch_size) * indicators[batch_size] for batch_size in range(B + 1)), 
+            model.addConstr(e[j] == e[j-1] + gp.quicksum(batch_runtimes.get(batch_size, 0) * indicators[batch_size] for batch_size in range(B + 1)), 
                         name=f"e_{j}")
 
     # Constraint 5: t_i = sum_j x_{i,j} e_j, forall i (if scheduled), otherwise t_i = large_value
