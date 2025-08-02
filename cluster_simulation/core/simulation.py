@@ -59,7 +59,7 @@ class Simulation(object):
         self.event_log = pd.DataFrame(columns=["time", "worker_id", "event"])
         self.batch_exec_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "workflow_id", 
                                                     "task_id", "batch_size", "job_ids"])
-        self.task_drop_log = pd.DataFrame(columns=["job_id", "workflow_id", "task_id", "drop_time", 
+        self.task_drop_log = pd.DataFrame(columns=["client_id", "job_id", "workflow_id", "task_id", "drop_time", 
                                                    "arrival_time", "slo", "deadline"])
         self.allocation_logs = []
 
@@ -329,10 +329,12 @@ class Simulation(object):
             for job_type in client.job_types:
                 stats_dict["clients"][-1][job_type] = {
                     "client_id": client.id, 
-                    "slo": client.per_job_config[job_type]["SLO"] if "SLO" in client.per_job_config[job_type] else -1}
+                    "slo": client.per_job_config[job_type]["SLO"] if "SLO" in client.per_job_config[job_type] else -1,
+                    "num_jobs": client.per_job_config[job_type]["NUM_JOBS"]}
                 
                 completed_jobs = [j for j in self.jobs.values() if j.client_id == client.id and len(j.completed_tasks) == len(j.tasks)]
                 stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
+                stats_dict["clients"][-1][job_type]["total_num_complete"] = len(completed_jobs)
 
                 if SLO_GRANULARITY == "JOB":
                     nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
@@ -354,9 +356,10 @@ class Simulation(object):
                 stats_dict["clients"][-1][job_type]["median_latency_ms"] = np.median(job_latencies)
                 stats_dict["clients"][-1][job_type]["mean_latency_ms"] = np.mean(job_latencies)
                 stats_dict["clients"][-1][job_type]["std_latency_ms"] = np.std(job_latencies)
-
-                stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(set(self.task_drop_log["job_id"]))
-                stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(set(self.task_drop_log["job_id"])) / \
+                
+                client_dropped_jobs = set(self.task_drop_log[self.task_drop_log["client_id"]==client.id]["job_id"])
+                stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(client_dropped_jobs)
+                stats_dict["clients"][-1][job_type]["drop_rate_qps"] = len(client_dropped_jobs) / \
                     (max(j.end_time for j in completed_jobs) - min(j.create_time for j in completed_jobs)) * 1000 \
                     if len(completed_jobs) > 0 else 0
         

@@ -175,6 +175,7 @@ class ShepherdScheduler(Scheduler):
                 # earliest task end time >= deadline + grace period
                 if (time + ot.task.model.batch_exec_times[24][0]) > ot.deadline * (1 + SLO_SLACK):
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                        "client_id": ot.task.job.client_id,
                         "job_id": ot.task.job_id,
                         "workflow_id": ot.task.task_type[0],
                         "task_id": ot.task.task_type[1],

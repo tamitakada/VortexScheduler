@@ -179,6 +179,7 @@ class HeftTaskWorker(TaskWorker):
                     for job_task in task.job.tasks:
                         self.rm_task_in_queue_history(job_task, current_time)
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                        "client_id": task.job.client_id,
                         "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
                         "drop_time": current_time, 
                         "arrival_time": task_arrival,
