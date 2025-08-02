@@ -36,7 +36,7 @@ def calculate_latency_stats(requests, logger):
     latencies = []
     for req in requests:
         # Latency = finish_time - arrival_time
-        if req['dropped_time'] is None:
+        if req['finish_time'] is not None:
             latency = req['finish_time'] - req['arrival_time']
             latencies.append(latency)
 
@@ -91,7 +91,7 @@ def analyze_by_batch_size(requests):
     # Group requests by batch size
     batch_stats = {}
     for req in requests:
-        if req['dropped_time'] is None:
+        if req['finish_time'] is not None:
             batch_size = req['batch_size']
             latency = req['finish_time'] - req['arrival_time']
         
@@ -123,7 +123,7 @@ def analyze_queue_time(requests, logger):
     
     queue_times = []
     for req in requests:
-        if req['dropped_time'] is None:
+        if req['finish_time'] is not None:
             queue_time = req['queue_time']
             queue_times.append(queue_time)
     
@@ -149,7 +149,7 @@ def analyze_slo_satisfaction(requests, logger):
     total = 0
     
     for req in requests:
-        if req['dropped_time'] is None:
+        if req['finish_time'] is not None:
             if req['finish_time']  <= req['deadline']:
                 satisfied += 1
             else:

@@ -3,6 +3,7 @@ from collections import deque
 import math
 import itertools
 from utils import SortedQueue
+import logging
 
 
 class SimpleScheduler:
@@ -10,12 +11,15 @@ class SimpleScheduler:
     batch_runtimes: dict
     slo: float
     # base_latency: float
+    logger: logging.Logger
 
-    def __init__(self, max_batch_size: int, batch_runtimes: dict):
+    def __init__(self, max_batch_size: int, batch_runtimes: dict, logger=None):
         self.max_batch_size = max_batch_size
         self.batch_runtimes = batch_runtimes
         # self.slo = slo
         # self.base_latency = base_latency
+        self.logger = logger
+
 
     def preempt(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, batch_finish_time: float) -> bool:
         size = len(current_batch) + len(queue)
@@ -113,20 +117,34 @@ class SimpleScheduler:
         return math.inf, None
 
     def offline_schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, finished_reqs: list) -> float:
-        cumulated_latency = 0
+        current_time = 0
         num_batch = 0
         while len(queue) > 0:
-            self.logger.info(f"####### Batch: {num_batch} Time: {cumulated_latency} #######")
-            self.schedule(current_batch, queue, current_time)
-            batch_time = self.batch_runtimes[len(current_batch)]
-            deadline = {req.id: req.deadline - cumulated_latency for req in current_batch}
+            self.logger.info(f"####### Batch: {num_batch} Time: {current_time} #######")
+            deadline = {req.id: req.deadline - current_time for req in queue}
             self.logger.info(f"deadline: {deadline}")
-            while len(current_batch) > 0:
-                req = current_batch.pop()
+
+            self.schedule(current_batch, queue, current_time)
+            batch_size = len(current_batch)
+            if batch_size > 0:
+                batch_time = self.batch_runtimes[batch_size]
+                self.logger.info(f"current batch (size: {batch_size}, time: {batch_time}): {[req.id for req in current_batch]}")
+
+                while len(current_batch) > 0:
+                    req = current_batch.pop()
+                    req.schedule(current_time, batch_size, self.batch_runtimes[batch_size])
+                    finished_reqs.append(req)
+                    self.logger.info(f"\tRequest {req.id}: time remaining: {req.deadline - current_time}")
+
+                current_time += batch_time
+                num_batch += 1
+
+            while len(queue) > 0 and queue[0].deadline < current_time + self.batch_runtimes[1]:
+                req = queue.pop()
+                req.get_dropped(current_time)
                 finished_reqs.append(req)
-                self.logger.info(f"\tRequest {req.id}: time remaining: {req.deadline - cumulated_latency}")
-            cumulated_latency += batch_time
-            num_batch += 1
+
+
 
             self.logger.info(f"--------------------------------")
 

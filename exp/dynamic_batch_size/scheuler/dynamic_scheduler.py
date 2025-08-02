@@ -13,7 +13,7 @@ class DynamicScheduler:
     max_batch_size: int
     batch_runtimes: dict
     slo: float
-    current_soltion: dict
+    scheduled_batches: dict[int, list[int]]
 
     def __init__(self, max_batch_size: int, batch_runtimes: dict, logger=None):
         # Use the logger passed from main, or create one for this module
@@ -27,6 +27,7 @@ class DynamicScheduler:
         self.max_batch_size = max_batch_size
         self.current_solution = None
         self.batch_runtimes = batch_runtimes
+        self.scheduled_batches = []
 
     def get_batch_duration(self, s_k):
         """Function f that maps batch size to runtime"""
@@ -110,11 +111,13 @@ class DynamicScheduler:
             batsh_size = result['s'][j]
             batch_latency = self.batch_runtimes.get(batsh_size, 0)
             self.logger.info(f"Position j={j} (batch size s[{j}]={result['s'][j]}), cumulated latency = {cumulated_latency}, batch_finish_time = {batch_latency}")
+            batch = []
             for i in range(N):
                 if result["x"][(i, j)] == 1:
                     self.logger.info(f"\tRequest {queue[i].id}: time remaining: {queue[i].deadline - current_time - cumulated_latency}")
+                    batch.append(queue[i].id)
             cumulated_latency += batch_latency
-
+            self.scheduled_batches.append(batch)
 
         req_ids = set([queue[i].id for i in range(N) if result["x"][(i,0)] == 1])
 
@@ -130,6 +133,43 @@ class DynamicScheduler:
         
 
         return math.inf, result
+
+    def offline_schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, finished_reqs: list) -> float:
+        current_time = 0
+        queue_copy = queue.copy()
+        self.schedule(current_batch, queue_copy, current_time)
+
+        num_batch = 0
+        for num_batch, batch in enumerate(self.scheduled_batches):
+            # self.logger.info(f"####### Batch: {num_batch} Time: {currnet_time} #######")
+            # deadline = {req.id: req.deadline - currnet_time for req in queue}
+            # self.logger.info(f"deadline: {deadline}")
+
+            batch_size = len(batch)
+            if batch_size > 0:
+                batch_time = self.batch_runtimes[batch_size]
+                # self.logger.info(f"current batch (size: {batch_size}, time: {batch_time}) {batch}")
+
+                for id in batch:
+                    req = queue.get_by_id(id)
+                    req.schedule(current_time, batch_size, self.batch_runtimes[batch_size])
+                    finished_reqs.append(req)
+                    queue.remove(req)
+                    # self.logger.info(f"\tRequest {req.id}: time remaining: {req.deadline - currnet_time}")
+
+
+                current_time += batch_time
+                num_batch += 1
+
+        for req in queue:
+            req.get_dropped(current_time)
+            finished_reqs.append(req)
+
+
+            self.logger.info(f"--------------------------------")
+
+        return current_time
+
 
 
 def solve_ilp(N, B, d, batch_runtimes):
@@ -235,37 +275,39 @@ def solve_ilp(N, B, d, batch_runtimes):
     
     # Solve first stage
     model.optimize()
-    
-    if model.status == GRB.OPTIMAL:
-        optimal_deadline_violations = model.ObjVal
 
-        # Stage 2: Add constraint for optimal deadline violations and minimize completion time
-        model.addConstr(gp.quicksum(z[i] for i in range(N)) == optimal_deadline_violations, name="optimal_deadline_constraint")
+    optimal_deadline_violations = model.ObjVal
+    
+    # if model.status == GRB.OPTIMAL:
+    #     
+
+    #     # Stage 2: Add constraint for optimal deadline violations and minimize completion time
+    #     model.addConstr(gp.quicksum(z[i] for i in range(N)) == optimal_deadline_violations, name="optimal_deadline_constraint")
         
-        # Change objective to minimize the completion time of all scheduled requests
-        # The completion time is the end time of the last batch position that has scheduled requests
-        # We can use e[j] which represents the cumulative time up to position j
-        # We need to find the maximum e[j] where s[j] > 0 (i.e., where there are scheduled requests)
+    #     # Change objective to minimize the completion time of all scheduled requests
+    #     # The completion time is the end time of the last batch position that has scheduled requests
+    #     # We can use e[j] which represents the cumulative time up to position j
+    #     # We need to find the maximum e[j] where s[j] > 0 (i.e., where there are scheduled requests)
         
-        # Add a variable to represent the maximum completion time
-        max_completion_time = model.addVar(vtype=GRB.CONTINUOUS, name="max_completion_time")
+    #     # Add a variable to represent the maximum completion time
+    #     max_completion_time = model.addVar(vtype=GRB.CONTINUOUS, name="max_completion_time")
         
-        # Constraint: max_completion_time >= e[j] for all j where s[j] > 0
-        for j in range(N):
-            # If s[j] > 0, then max_completion_time >= e[j]
-            # Since s[j] is an integer >= 0, we need a binary indicator to check if s[j] > 0
-            indicator = model.addVar(vtype=GRB.BINARY, name=f"indicator_{j}")
-            # indicator = 1 if s[j] >= 1, 0 otherwise
-            model.addConstr(indicator <= s[j], name=f"indicator_lb_{j}")
-            model.addConstr(s[j] <= M * indicator, name=f"indicator_ub_{j}")
-            # If indicator = 1, then max_completion_time >= e[j]
-            model.addConstr(max_completion_time >= e[j] - M * (1 - indicator), name=f"max_completion_time_{j}")
+    #     # Constraint: max_completion_time >= e[j] for all j where s[j] > 0
+    #     for j in range(N):
+    #         # If s[j] > 0, then max_completion_time >= e[j]
+    #         # Since s[j] is an integer >= 0, we need a binary indicator to check if s[j] > 0
+    #         indicator = model.addVar(vtype=GRB.BINARY, name=f"indicator_{j}")
+    #         # indicator = 1 if s[j] >= 1, 0 otherwise
+    #         model.addConstr(indicator <= s[j], name=f"indicator_lb_{j}")
+    #         model.addConstr(s[j] <= M * indicator, name=f"indicator_ub_{j}")
+    #         # If indicator = 1, then max_completion_time >= e[j]
+    #         model.addConstr(max_completion_time >= e[j] - M * (1 - indicator), name=f"max_completion_time_{j}")
         
-        # Set objective to minimize the maximum completion time
-        model.setObjective(max_completion_time, GRB.MINIMIZE)
+    #     # Set objective to minimize the maximum completion time
+    #     model.setObjective(max_completion_time, GRB.MINIMIZE)
         
-        # Solve second stage
-        model.optimize()
+    #     # Solve second stage
+    #     model.optimize()
 
     if model.status == GRB.OPTIMAL:
         solution = {
@@ -275,7 +317,8 @@ def solve_ilp(N, B, d, batch_runtimes):
             "t": [t[i].X for i in range(N)],
             "z": [round(z[i].X) for i in range(N)],
             "obj": N - round(optimal_deadline_violations),
-            "max_completion_time": max_completion_time.X
+            # "max_completion_time": max_completion_time.X
+             "max_completion_time": 0
         }
         return solution
     else:

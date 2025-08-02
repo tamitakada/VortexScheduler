@@ -5,6 +5,7 @@ from hmac import new
 import json
 import logging
 import argparse
+import random
 
 import math
 from performance import get_performance_metrics
@@ -159,6 +160,8 @@ if __name__ == "__main__":
                     help='Number of requests to simulate in the offline setting (default: 0)')
     parser.add_argument('--output-file', type=str, default=None,
                        help='Custom output filename for logging (default: scheduler_name-preemption-trace_variation-slo_factor-max_batch_size.log)')
+    parser.add_argument('--slo-csv', type=str, default=None,
+                       help='Path to CSV file containing SLO factors and arrival times (e.g., uniform-slo.csv)')
     args = parser.parse_args()
     
     
@@ -216,12 +219,33 @@ if __name__ == "__main__":
         exit(1)
     
     # Create requests from arrival times
-    for i, arrival_time in enumerate(arrival_times):
-        # random sample a slo factor between 1.5 and 5.0
-        # slo_factor = random.uniform(2, 25)
-        slo_factor = args.slo_factor
-        request = Request(arrival_time, i, slo_factor)
-        future_requests.append(request)
+    if args.slo_csv:
+        # Read SLO factors and arrival times from CSV file
+        logger.info(f"Reading SLO factors and arrival times from {args.slo_csv}")
+        with open(args.slo_csv, mode='r', newline='') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                request_id = int(row['request_id'])
+                slo_factor = float(row['slo_factor'])
+                arrival_time = float(row['arrival_time'])
+                
+                request = Request(arrival_time if args.offline_num_reqs == 0 else 0, request_id, slo_factor)
+                future_requests.append(request)
+                
+                if args.offline_num_reqs > 0 and request_id >= args.offline_num_reqs - 1:
+                    break
+    else:
+        # Use original method with random SLO factors
+        for i, arrival_time in enumerate(arrival_times):
+            # random sample a slo factor between 1.5 and 25
+            # slo_factor = random.uniform(1.5, 25)
+            slo_factor = args.slo_factor
+            
+            request = Request(arrival_time if args.offline_num_reqs == 0 else 0, i, slo_factor)
+            future_requests.append(request)
+
+            if args.offline_num_reqs > 0 and i >= args.offline_num_reqs - 1:
+                break
     
     logger.info(f"Loaded {len(future_requests)} requests from the trace file")
 
@@ -233,7 +257,7 @@ if __name__ == "__main__":
 
     # Initialize scheduler based on command line arguments
     if args.scheduler == 'simple':
-        scheduler = SimpleScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes)
+        scheduler = SimpleScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
     elif args.scheduler == 'dynamic':
         scheduler = DynamicScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
     else:
@@ -255,97 +279,90 @@ if __name__ == "__main__":
 
     num_iters = 0;
 
-    # po
+
     if args.offline_num_reqs > 0:
-        num_reqs = 0
-        while num_reqs < args.offline_num_reqs and len(future_requests) > 0:
-            req = future_requests.pop()
-            queue.append(req)
-            num_reqs += 1
-        logger.info(f"[New requests] {num_reqs}")
+        fetch_new_requests(current_time, future_requests, queue)
+        scheduler.offline_schedule(current_batch, queue, current_time, finished_requests)
+    else:
+        while (True):
 
-
-
-    while (True):
-
-        # check the event
-        if len(current_batch) == 0:
-            event = Event.NEW_REQS_ARRIVED
-        elif current_time == batch_finish_time:
-            event = Event.BATCH_FINISHED
-        else:
-            event = Event.CHECK_PREEMPTION
-
-        logger.info("\n" + "-"*10  +  f"Current time: {current_time}" + f" ({event.value})" + "-"*10)
-
-        # drop requests
-        drop_reqs = drop_requests(current_time, queue, finished_requests)
-        logger.info(f"[Dropped requests] {drop_reqs}")
-        
-        # fetech new reqs
-        new_reqs = fetch_new_requests(current_time, future_requests, queue
-        )
-        if len(new_reqs) > 0:
-            logger.info(f"[New requests] {new_reqs}")
-
-        logger.info(f"[Current batch] {[req.id for req in current_batch]}")
-        logger.info(f"[Queue] {[req.id for req in queue]}")
-        # logger.info(f"[Queue] {queue.requests}")
-
-        # check if we need to do preemption
-        if (event == Event.CHECK_PREEMPTION and args.preemption):
-            # do something
-            logger.info(f"[Check preemption] at {current_time}")
-            do_preemption = scheduler.preempt(current_batch, queue, current_time, batch_finish_time)
-            if do_preemption:
-                logger.info(f"[New scheduled batch] {[req.id for req in current_batch]}")
-                duration = batch_runtimes[len(current_batch)]
-                batch_finish_time = current_time + duration
-
-
-        # check if the current batch is finished
-        if event == Event.BATCH_FINISHED:
-            assert len(current_batch) > 0, f"The current batch should be finished at this time but the current batch is empty."
-            req_ids = []
-            
-            while len(current_batch) > 0:
-                req = current_batch.pop()
-                assert req.finish_time == current_time, f"The finish time of the request {req.id} is not correct."
-                req_ids.append(req.id)
-                finished_requests.append(req)
-            logger.info(f"[Batch finished] {req_ids}")
-            batch_finish_time = math.inf
-
-        # schedule the next batch
-        if event != Event.CHECK_PREEMPTION:
-            next_check_time, _ = scheduler.schedule(current_batch, queue, current_time)
-            if len(current_batch) > 0:
-                logger.info(f"[Scheduled] {[req.id for req in current_batch]}")
-                duration = batch_runtimes[len(current_batch)]
-                batch_finish_time = current_time + duration
-                # update the timestep in the current batch
-                for req in current_batch:
-                    req.schedule(current_time, len(current_batch), batch_runtimes[len(current_batch)])
+            # check the event
+            if len(current_batch) == 0:
+                event = Event.NEW_REQS_ARRIVED
+            elif current_time == batch_finish_time:
+                event = Event.BATCH_FINISHED
             else:
-                logger.info(f"[No batch scheduled] queue length: {len(queue)}")
+                event = Event.CHECK_PREEMPTION
 
-        # check if the trace is finished
-        if len(future_requests) == 0 and len(queue) == 0 and len(current_batch) == 0:
-            logger.info("Trace finished")
-            break
-        
-        # check what is the next event
-        next_req_arrival_time = future_requests[0].arrival_time if len(future_requests) > 0 else math.inf
-        assert not (batch_finish_time==math.inf and next_check_time == math.inf and next_req_arrival_time == math.inf), f"The 3 times are all inf, which is not possible."
-        current_time = min(next_check_time, batch_finish_time, next_req_arrival_time)
-        logger.info(f"[Time] batch finish time: {batch_finish_time} next req arrival time: {next_req_arrival_time} next check time: {next_check_time}")
+            logger.info("\n" + "-"*10  +  f"Current time: {current_time}" + f" ({event.value})" + "-"*10)
+
+            # drop requests
+            drop_reqs = drop_requests(current_time, queue, finished_requests)
+            logger.info(f"[Dropped requests] {drop_reqs}")
+            
+            # fetech new reqs
+            new_reqs = fetch_new_requests(current_time, future_requests, queue)
+            if len(new_reqs) > 0:
+                logger.info(f"[New requests] {new_reqs}")
+
+            logger.info(f"[Current batch] {[req.id for req in current_batch]}")
+            logger.info(f"[Queue] {[req.id for req in queue]}")
+            # logger.info(f"[Queue] {queue.requests}")
+
+            # check if we need to do preemption
+            if (event == Event.CHECK_PREEMPTION and args.preemption):
+                # do something
+                logger.info(f"[Check preemption] at {current_time}")
+                do_preemption = scheduler.preempt(current_batch, queue, current_time, batch_finish_time)
+                if do_preemption:
+                    logger.info(f"[New scheduled batch] {[req.id for req in current_batch]}")
+                    duration = batch_runtimes[len(current_batch)]
+                    batch_finish_time = current_time + duration
 
 
-        num_iters += 1
+            # check if the current batch is finished
+            if event == Event.BATCH_FINISHED:
+                assert len(current_batch) > 0, f"The current batch should be finished at this time but the current batch is empty."
+                req_ids = []
+                
+                while len(current_batch) > 0:
+                    req = current_batch.pop()
+                    assert req.finish_time == current_time, f"The finish time of the request {req.id} is not correct."
+                    req_ids.append(req.id)
+                    finished_requests.append(req)
+                logger.info(f"[Batch finished] {req_ids}")
+                batch_finish_time = math.inf
+
+            # schedule the next batch
+            if event != Event.CHECK_PREEMPTION:
+                next_check_time, _ = scheduler.schedule(current_batch, queue, current_time)
+                if len(current_batch) > 0:
+                    logger.info(f"[Scheduled] {[req.id for req in current_batch]}")
+                    duration = batch_runtimes[len(current_batch)]
+                    batch_finish_time = current_time + duration
+                    # update the timestep in the current batch
+                    for req in current_batch:
+                        req.schedule(current_time, len(current_batch), batch_runtimes[len(current_batch)])
+                else:
+                    logger.info(f"[No batch scheduled] queue length: {len(queue)}")
+
+            # check if the trace is finished
+            if len(future_requests) == 0 and len(queue) == 0 and len(current_batch) == 0:
+                logger.info("Trace finished")
+                break
+            
+            # check what is the next event
+            next_req_arrival_time = future_requests[0].arrival_time if len(future_requests) > 0 else math.inf
+            assert not (batch_finish_time==math.inf and next_check_time == math.inf and next_req_arrival_time == math.inf), f"The 3 times are all inf, which is not possible."
+            current_time = min(next_check_time, batch_finish_time, next_req_arrival_time)
+            logger.info(f"[Time] batch finish time: {batch_finish_time} next req arrival time: {next_req_arrival_time} next check time: {next_check_time}")
 
 
-        # if num_iters > 20:
-        #     break
+            num_iters += 1
+
+
+            # if num_iters > 20:
+            #     break
 
     
     # Write finished requests to JSON file
