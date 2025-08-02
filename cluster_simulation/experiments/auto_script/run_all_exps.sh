@@ -92,6 +92,11 @@ if [ "${#prop_list[@]}" -gt 0 ]; then
     clone_num=$((i % 5 + 1))
     echo "Current clone: $clone_num"
 
+    if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then
+        echo "Waiting for previous to finish..."
+        wait
+    fi
+
     cd $root_dir/exps/$clone_num/VortexScheduler
     cd cluster_simulation
     source set_env.sh
