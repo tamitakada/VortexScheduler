@@ -6,8 +6,8 @@ is referenced from Sparrow: https://github.com/radlab/sparrow
 import numpy as np
 import pandas as pd
 
-# import gurobipy as gp
-# from gurobipy import GRB
+import gurobipy as gp
+from gurobipy import GRB
 
 from queue import PriorityQueue
 

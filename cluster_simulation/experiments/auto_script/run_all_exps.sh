@@ -9,7 +9,7 @@ configs_out=$(python3 parse_configs.py $configs_path)
 run_experiment() {
     local cfg_prop_list=("$@")
 
-    sed -i.bak -e "s/^TOTAL_NUM_OF_NODES = .*$/TOTAL_NUM_OF_NODES = ${cfg_prop_list[3]}/" \
+    sed -i '.bak' -e "s/^TOTAL_NUM_OF_NODES = .*$/TOTAL_NUM_OF_NODES = ${cfg_prop_list[3]}/" \
         -e "s/^CLIENT_CONFIGS = .*$/CLIENT_CONFIGS = ${cfg_prop_list[4]}/" \
         -e "s/^WORKLOAD_DISTRIBUTION = .*$/WORKLOAD_DISTRIBUTION = ${cfg_prop_list[5]}/" \
         -e "s/^GAMMA_CV = .*$/GAMMA_CV = ${cfg_prop_list[6]}/" \
@@ -55,9 +55,6 @@ if [ ! -d "exps/1" ]; then
     cp -r exps/1 exps/3
     cp -r exps/1 exps/4
     cp -r exps/1 exps/5
-    cp -r exps/1 exps/6
-    cp -r exps/1 exps/7
-    cp -r exps/1 exps/8
 fi
 
 prop_list=()
@@ -65,7 +62,7 @@ i=0
 IFS=$'\n'
 while read -r property; do
     if [[ -z "$property" ]]; then
-        clone_num=$((i % 8 + 1))
+        clone_num=$((i % 5 + 1))
         echo "Current clone: $clone_num"
 
         if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then
@@ -92,7 +89,7 @@ while read -r property; do
 done <<< "$configs_out"
 
 if [ "${#prop_list[@]}" -gt 0 ]; then
-    clone_num=$((i % 8 + 1))
+    clone_num=$((i % 5 + 1))
     echo "Current clone: $clone_num"
 
     if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then

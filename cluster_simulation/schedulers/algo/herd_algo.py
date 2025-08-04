@@ -4,8 +4,8 @@ from core.workflow import *
 
 from scipy import stats
 
-# import gurobipy as gp
-# from gurobipy import GRB
+import gurobipy as gp
+from gurobipy import GRB
 
 
 def _model_affinity(m1: Model, m2: Model) -> float:
