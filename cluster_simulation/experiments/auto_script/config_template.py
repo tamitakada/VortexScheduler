@@ -36,6 +36,9 @@ HERD_K = 1.5
 # run HERD every [HERD_PERIODICITY] ms
 HERD_PERIODICITY = 0
 
+# BEST_EXEC_TIME_ONLY | FIRST_TASK_DEADLINE | OPTIMAL 
+SHEPHERD_BATCHING_POLICY = "BEST_EXEC_TIME_ONLY"
+
 
 """  -------        General Scheduling Parameters  --------- """
 
