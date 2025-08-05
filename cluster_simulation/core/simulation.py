@@ -397,11 +397,12 @@ class Simulation(object):
         #     # print statistics for each job type
         #     print_stats_by_job_type(response_time_per_type, slow_down_per_type)
         if self.produce_breakdown:
-            self.produce_time_breakdown_results(completed_jobs)
+            all_completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
+            self.produce_time_breakdown_results(all_completed_jobs)
 
     def produce_time_breakdown_results(self, completed_jobs):
 
-        dataframe = pd.DataFrame(columns=["job_id", "load_info_staleness", "placement_info_staleness",
+        dataframe = pd.DataFrame(columns=["job_id", "client_id", "load_info_staleness", "placement_info_staleness",
                                           "workflow_type", "job_create_time", "scheduler_type", "slowdown", "response_time"])
         dataframe_tasks_log = pd.DataFrame(columns=["workflow_type", "task_id", "worker_id", "task_arrival_time", "task_start_exec_time", "time_to_buffer", "dependency_wait_time",
                                                     "time_spent_in_queue", "model_fetching_time", "execution_time"])
@@ -414,7 +415,7 @@ class Simulation(object):
             slowdown = (completed_job.end_time - completed_job.create_time) / \
                 WORKFLOW_LIST[completed_job.job_type_id]["BEST_EXEC_TIME"]
             response_time = completed_job.end_time - completed_job.create_time
-            dataframe.loc[index] = [completed_job.id, LOAD_INFORMATION_STALENESS, PLACEMENT_INFORMATION_STALENESS, completed_job.job_type_id,
+            dataframe.loc[index] = [completed_job.id, completed_job.client_id, LOAD_INFORMATION_STALENESS, PLACEMENT_INFORMATION_STALENESS, completed_job.job_type_id,
                                     completed_job.create_time, self.simulation_name, slowdown, response_time]
 
         task_index = 0
