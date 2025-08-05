@@ -50,6 +50,7 @@ if [ ! -d "exps/1" ]; then
     cd exps/1
     git clone https://github.com/tamitakada/VortexScheduler
     cd VortexScheduler
+    git checkout linux
     cd $root_dir
 
     cp -r exps/1 exps/2
