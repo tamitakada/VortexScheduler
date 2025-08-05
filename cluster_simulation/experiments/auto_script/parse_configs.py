@@ -29,7 +29,7 @@ if __name__ == "__main__":
         print_arg("FLEX_LAMBDA", config, 3.03)
         print_arg("HERD_K", config, 1.3)
         print_arg("HERD_PERIODICITY", config, 0)
-        print_arg("SHEPHERD_BATCHING_POLICY", config, "BEST_EXEC_TIME_ONLY")
+        print_arg("SHEPHERD_BATCHING_POLICY", config, "BEST_EXEC_TIME_ONLY", True)
         print(config["SLO_SLACK"])
         print_arg("SLO_GRANULARITY", config, "JOB", True)
         print(config["ENABLE_MULTITHREADING"])
