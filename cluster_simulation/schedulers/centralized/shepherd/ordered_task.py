@@ -20,7 +20,7 @@ class OrderedTask:
         return self.deadline < other.deadline
     
     def __str__(self):
-        return f"[PRIORITY: {self.priority}] {self.task}"
+        return f"[DEADLINE: {self.deadline}] {self.task}"
     
     def __repr__(self):
         return self.__str__()
