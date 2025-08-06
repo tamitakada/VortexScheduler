@@ -287,7 +287,10 @@ if __name__ == "__main__":
             elif current_time == batch_finish_time:
                 event = Event.BATCH_FINISHED
             else:
+                if not args.preemption:
+                    assert False, f"The event should not be check preemption at this time."
                 event = Event.CHECK_PREEMPTION
+    
 
             logger.info("\n" + "-"*10  +  f"Current time: {current_time}" + f" ({event.value})" + "-"*10)
 
@@ -350,6 +353,10 @@ if __name__ == "__main__":
             next_req_arrival_time = future_requests[0].arrival_time if len(future_requests) > 0 else math.inf
             assert not (batch_finish_time==math.inf and next_check_time == math.inf and next_req_arrival_time == math.inf), f"The 3 times are all inf, which is not possible."
             current_time = min(next_check_time, batch_finish_time, next_req_arrival_time)
+            if not args.preemption and batch_finish_time != math.inf and next_req_arrival_time != math.inf:
+                current_time = batch_finish_time
+
+
             logger.info(f"[Time] batch finish time: {batch_finish_time} next req arrival time: {next_req_arrival_time} next check time: {next_check_time}")
 
 
