@@ -12,14 +12,14 @@ from performance import get_performance_metrics
 
 
 from scheuler.dynamic_scheduler import DynamicScheduler
-from scheuler.simple_scheduler import SimpleScheduler 
+from scheuler.largest_batch_scheduler import LargestBatchScheduler 
 from utils import SortedQueue
 from vary_trace import *
 
 
 batch_runtimes = {}
 
-def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, trace_variation="", slo_factor=None, max_batch_size=None, output_file=None):
+def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, trace_variation="", slo_factor=None, slo_csv=None, max_batch_size=None, output_file=None):
     """Set up logging with specified level"""
     level_map = {
         "DEBUG": logging.DEBUG,
@@ -39,7 +39,12 @@ def setup_logging(log_level_str="INFO", scheduler_name="", preemption=False, tra
         # Use the current naming convention
         preemption_suffix = "-preemption" if preemption else ""
         trace_suffix = f"-{trace_variation}" if trace_variation else ""
-        slo_suffix = f"-slo-{slo_factor}" if slo_factor is not None else ""
+        if slo_csv is not None:
+            slo_suffix = f"-slo-{slo_csv}"
+        elif slo_factor is not None:
+            slo_suffix = f"-slo-{slo_factor}"
+        else:
+            slo_suffix = ""
         batch_suffix = f"-batch-{max_batch_size}" if max_batch_size is not None else ""
         log_filename = f'./output/{scheduler_name}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
     
@@ -106,6 +111,8 @@ class Request:
 queue = SortedQueue(sort_by="deadline")
 future_requests = SortedQueue(sort_by="arrival_time")
 finished_requests = []
+
+queue_at_each_interval = {}
 
 
 current_batch = SortedQueue(sort_by="deadline")
@@ -192,7 +199,7 @@ if __name__ == "__main__":
         trace_variation = f"multi-user-{args.num_user}"
     
     # Set up logging with scheduler name, preemption info, trace variation, slo factor, and max batch size
-    logger = setup_logging(args.log_level, args.scheduler, args.preemption, trace_variation, args.slo_factor, args.max_batch_size, args.output_file)
+    logger = setup_logging(args.log_level, args.scheduler, args.preemption, trace_variation, args.slo_factor, args.slo_csv, args.max_batch_size, args.output_file)
     logger.info(f"Starting simulation with scheduler: {args.scheduler}, preemption: {args.preemption}, trace_variation: {trace_variation}, slo_factor: {args.slo_factor}, max_batch_size: {args.max_batch_size}, log level: {args.log_level}")
 
     
@@ -252,7 +259,7 @@ if __name__ == "__main__":
 
     # Initialize scheduler based on command line arguments
     if args.scheduler == 'simple':
-        scheduler = SimpleScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
+        scheduler = LargestBatchScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
     elif args.scheduler == 'dynamic':
         scheduler = DynamicScheduler(max_batch_size=args.max_batch_size, batch_runtimes=batch_runtimes, logger=logger)
     else:
@@ -275,6 +282,8 @@ if __name__ == "__main__":
     num_iters = 0;
 
 
+
+
     if args.offline:
         fetch_new_requests(current_time, future_requests, queue)
         scheduler.offline_schedule(current_batch, queue, current_time, finished_requests)
@@ -293,15 +302,15 @@ if __name__ == "__main__":
     
 
             logger.info("\n" + "-"*10  +  f"Current time: {current_time}" + f" ({event.value})" + "-"*10)
-
-            # drop requests
-            drop_reqs = drop_requests(current_time, queue, finished_requests)
-            logger.info(f"[Dropped requests] {drop_reqs}")
             
             # fetech new reqs
             new_reqs = fetch_new_requests(current_time, future_requests, queue)
             if len(new_reqs) > 0:
                 logger.info(f"[New requests] {new_reqs}")
+
+            # drop requests
+            drop_reqs = drop_requests(current_time, queue, finished_requests)
+            logger.info(f"[Dropped requests] {drop_reqs}")
 
             logger.info(f"[Current batch] {[req.id for req in current_batch]}")
             logger.info(f"[Queue] (size: {len(queue)}) {[req.id for req in queue]}")
@@ -333,6 +342,11 @@ if __name__ == "__main__":
 
             # schedule the next batch
             if event != Event.CHECK_PREEMPTION:
+                if len(queue) > 0:
+                    queue_at_each_interval[current_time] = {req.id: req.deadline - req.arrival_time for req in queue}
+                else:
+                    queue_at_each_interval[current_time] = {}
+
                 next_check_time, _ = scheduler.schedule(current_batch, queue, current_time)
                 if len(current_batch) > 0:
                     logger.info(f"[Scheduled] {[req.id for req in current_batch]}")
@@ -385,13 +399,25 @@ if __name__ == "__main__":
     if args.output_file:
         # If output_file is provided, use it as the base name
         perf_log_filename = f'./output/{args.output_file}.log'
+        queue_filename = f'./output/{args.output_file}_queue.json'
     else:
         # Use the current naming convention
         preemption_suffix = "-preemption" if args.preemption else ""
         trace_suffix = f"-{trace_variation}" if trace_variation else ""
-        slo_suffix = f"-slo-{args.slo_factor}"
+        if args.slo_csv is not None:
+            slo_suffix = f"-slo-{args.slo_csv}"
+        elif args.slo_factor is not None:
+            slo_suffix = f"-slo-{args.slo_factor}"
+        else:
+            slo_suffix = ""
         batch_suffix = f"-batch-{args.max_batch_size}"
         perf_log_filename = f'./output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}.log'
+        queue_filename = f'./output/{args.scheduler}{preemption_suffix}{trace_suffix}{slo_suffix}{batch_suffix}_queue.json'
+
+    # write queue to json
+    with open(queue_filename, 'w') as jsonfile:
+        json.dump(queue_at_each_interval, jsonfile, indent=2)
+
     perf_handler = logging.FileHandler(perf_log_filename)
     perf_handler.setLevel(logging.INFO)
     

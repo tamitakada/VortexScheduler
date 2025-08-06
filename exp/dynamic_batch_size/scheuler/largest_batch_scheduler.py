@@ -6,7 +6,7 @@ from utils import SortedQueue
 import logging
 
 
-class SimpleScheduler:
+class LargestBatchScheduler:
     max_batch_size: int
     batch_runtimes: dict
     slo: float
@@ -49,6 +49,33 @@ class SimpleScheduler:
 
             return True
 
+    # def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
+    #     assert len(current_batch) == 0, f"Current batch is not empty: {current_batch}"
+
+    #     if len(queue) == 0:
+    #         return math.inf, None
+        
+    #     time_remaining = {req.id: req.deadline - current_time for req in queue}
+    #     time_remaining = sorted(time_remaining.items(), key=lambda x: x[1])
+    #     self.logger.info(f"Time remaining: {time_remaining}")
+    #     largest_time_remaining = time_remaining[-1][1]
+    #     assert self.batch_runtimes[1] <= largest_time_remaining, f"The time remaining is not large enough for the smallest batch runtime: {largest_time_remaining} < {self.batch_runtimes[1]}"
+    #     largest_batch_size = 0
+    #     while largest_batch_size+1 <= self.max_batch_size and largest_batch_size+1 <= len(queue) and self.batch_runtimes[largest_batch_size+1] <= time_remaining[-largest_batch_size-1][1]:
+    #         largest_batch_size += 1
+    #         self.logger.info(f"largest batch size: {largest_batch_size} req: {time_remaining[-largest_batch_size][0]} time remaining: {time_remaining[-largest_batch_size][1]} batch runtime: {self.batch_runtimes[largest_batch_size]}")
+
+    #     self.logger.info(f"largest time remaining: {largest_time_remaining} largest feasible batch size: {largest_batch_size}")
+
+    #     for i in range(largest_batch_size):
+    #         req_id = time_remaining[-largest_batch_size + i][0]
+    #         req = queue.get_by_id(req_id)
+    #         assert req is not None, f"Request {req_id} not found in queue: {queue}"
+    #         queue.remove(req)
+    #         current_batch.append(req)
+    #         # req.schedule(current_time, largest_batch_size, self.batch_runtimes[largest_batch_size])
+        
+    #     return math.inf, None
 
     def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
         """

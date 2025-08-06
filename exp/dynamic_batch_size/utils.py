@@ -1,5 +1,8 @@
 import bisect
 
+
+
+
 class SortedQueue:
     """
     A queue that maintains requests in ascending order by arrival_time.
@@ -45,6 +48,14 @@ class SortedQueue:
         if self.requests:
             return self.requests.pop(0)
         raise IndexError("Queue is empty")
+
+    def pop_right(self):
+        """
+        Remove and return the request with the latest deadline.
+        """
+        if self.requests:
+            return self.requests.pop()
+        raise IndexError("Queue is empty")
     
     def clear(self):
         """
@@ -87,3 +98,6 @@ class SortedQueue:
         """
         for item in items:
             self.append(item)
+
+    def __repr__(self):
+        return f"SortedQueue(requests={self.requests})"

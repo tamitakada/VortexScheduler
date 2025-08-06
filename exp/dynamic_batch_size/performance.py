@@ -154,6 +154,7 @@ def analyze_slo_satisfaction(requests, logger):
                 satisfied += 1
             else:
                 not_satisfied += 1
+                logger.info(f"!!!!! Request {req['id']} not satisfied: finish_time: {req['finish_time']} deadline: {req['deadline']}")
         else:
             dropped += 1
         total += 1
