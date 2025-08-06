@@ -12,32 +12,56 @@ from core.config import *
 import numpy as np
 import math
 import ast
+import json
 
 
-def plot_response_time_vs_arrival_time(job_df, out_path, plot_title_prefix):
-    plt.figure(figsize=(10, 6))
+def plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plot_title_prefix):
+    client_ids = sorted(set(job_df["client_id"]))
+    nrows = math.ceil(len(client_ids) / 2)
 
-    job_types = set(job_df["workflow_type"])
-    job_names = { job_type: list(filter(lambda job: job["JOB_TYPE"]==job_type, WORKFLOW_LIST))[0]["JOB_NAME"] 
-                 for job_type in job_types }
+    fig, axes = plt.subplots(nrows, 2, figsize=(6 * 2, 4 * nrows))
+    axes = axes.flatten()
 
-    fst_job_create_time = job_df["job_create_time"][0]
-    for jt in job_types:
-        job_create_times = job_df[job_df["workflow_type"] == jt]["job_create_time"] - fst_job_create_time
-        job_response_times = job_df[job_df["workflow_type"] == jt]["response_time"]
+    for i, client_id in enumerate(client_ids):
+        client_df = job_df[job_df["client_id"]==client_id]
+        drop_client_df = drop_df[drop_df["client_id"]==client_id]
+        for jt in set(client_df["workflow_type"]):
+            job_create_times = client_df[client_df["workflow_type"] == jt]["job_create_time"] / 1000
+            job_response_times = client_df[client_df["workflow_type"] == jt]["response_time"]
 
-        plt.scatter(
-            job_create_times,
-            job_response_times,
-            label=f"Workflow {jt}: {job_names[jt]}",
-            s=4
-        )
+            slo_multiplier = float([k for k in all_stats[client_id][f"{jt}"].keys() if "jobs_within" in k][0].split("_")[2].split("slo")[0])
+            slo = all_stats[client_id][f"{jt}"]["slo"]
+
+            axes[i].scatter(
+                job_create_times,
+                job_response_times,
+                label=f"Workflow ID {jt}: Complete",
+                s=4,
+                color="#4ee8dd"
+            )
+
+            axes[i].scatter(
+                drop_client_df["arrival_time"],
+                drop_client_df["drop_time"] - drop_client_df["arrival_time"],
+                label=f"Workflow ID {jt}: Dropped",
+                s=4,
+                color="#9145d3"
+            )
+            
+            axes[i].axhline(y=slo, color='red', linestyle='--', linewidth=1, label="SLO")
+            axes[i].axhline(y=(slo * slo_multiplier), color='orange', linestyle='--', linewidth=1, label="Late deadline")
+            axes[i].set_title(f"Client {client_id}")
+            axes[i].set_xlabel("Job arrival time (s since start)")
+            axes[i].set_ylabel("Response time (ms)")
+
+            axes[i].legend()
     
-    plt.xlabel("Job arrival time (ms since start)")
-    plt.ylabel("Response time (ms)")
-    plt.title(f"{plot_title_prefix}\nResponse Time vs. Arrival Time")
+    for i in range(4):
+        if i >= len(client_ids):
+            axes[i].set_visible(False)
 
-    plt.legend()
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    fig.suptitle(f"{plot_title_prefix}\nJob Response Time vs. Arrival Time by Client")
     plt.savefig(os.path.join(out_path, "response_vs_arrival.pdf"))
     plt.close()
 
@@ -107,52 +131,52 @@ def plot_batch_size_bar_chart(batch_df, out_path, plot_title_prefix):
 
 
 def stats_by_task_type(task_df, batch_df, job_df, out_path):
-    # assert((task_df["dependency_wait_time"]==0).all())
-    # assert((task_df["model_fetching_time"]==0).all()) 
-
-    task_type_df = pd.DataFrame(columns=["workflow_id","task_id", "med_e2e_latency_ms",
+    task_type_df = pd.DataFrame(columns=["client_id", "workflow_id","task_id", "med_e2e_latency_ms",
                                         "med_model_exec_time_ms", "mean_model_exec_time_ms", "model_exec_time_stddev",
                                         "med_queueing_time_ms", "mean_queueing_time_ms", "queueing_time_stddev",
                                         "mean_batch_size","batch_size_stddev","max_batch_size","min_batch_size",
-                                        "mean_arrival_at_worker_interval_ms", "p95_arrival_at_worker_interval_ms", "mean_creation_to_exec_start_ms"])
-    task_types = list(map(tuple, task_df[['workflow_type', 'task_id']].drop_duplicates().values))
-    for task_type in task_types:
-        task_type_task_df = task_df[(task_df["workflow_type"]==task_type[0]) & (task_df["task_id"]==task_type[1])]
-        task_type_batch_df = batch_df[(batch_df["workflow_id"]==task_type[0]) & (batch_df["task_id"]==task_type[1])]
-        task_arrival_diffs = task_type_task_df.groupby("worker_id")["task_arrival_time"].apply(
-            lambda x: x.diff().mean())
+                                        "mean_arrival_at_worker_interval_ms", "mean_creation_to_exec_start_ms"])
+    
+    for client_id in sorted(set(job_df["client_id"])):
+
+
+        task_types = list(map(tuple, task_df[['workflow_type', 'task_id']].drop_duplicates().values))
+        for task_type in task_types:
+            task_type_task_df = task_df[(task_df["workflow_type"]==task_type[0]) & (task_df["task_id"]==task_type[1])]
+            task_type_batch_df = batch_df[(batch_df["workflow_id"]==task_type[0]) & (batch_df["task_id"]==task_type[1])]
+            task_arrival_diffs = task_type_task_df.groupby("worker_id")["task_arrival_time"].apply(
+                lambda x: x.diff().mean())
+                
+            def _parse_data(row):
+                job_ids = ast.literal_eval(row["job_ids"])
+                diff_to_start = [row["start_time"] - job_df[job_df["job_id"]==jid]["job_create_time"]
+                                for jid in job_ids]
+                return np.mean(diff_to_start)
+
+            def _is_batch_logged(row):
+                job_ids = ast.literal_eval(row["job_ids"])
+                return all(jid in job_df["job_id"].values for jid in job_ids)
             
-        def _parse_data(row):
-            job_ids = ast.literal_eval(row["job_ids"])
-            diff_to_start = [row["start_time"] - job_df[job_df["job_id"]==jid]["job_create_time"]
-                             for jid in job_ids]
-            return np.mean(diff_to_start)
-                       
-        def _is_batch_logged(row):
-            job_ids = ast.literal_eval(row["job_ids"])
-            return all(jid in job_df["job_id"].values for jid in job_ids)
-        
-        job_creation_to_exec_start = task_type_batch_df[task_type_batch_df.apply(_is_batch_logged, axis=1)].apply(_parse_data, axis=1)
-        
-        task_type_df.loc[len(task_type_df)] = {
-            "workflow_id": task_type[0],
-            "task_id": task_type[1],
-            "med_e2e_latency_ms": (task_type_task_df["time_spent_in_queue"]+task_type_task_df["execution_time"]).median(),
-            "med_model_exec_time_ms": task_type_task_df["execution_time"].median(),
-            "mean_model_exec_time_ms": task_type_task_df["execution_time"].mean(),
-            "model_exec_time_stddev": task_type_task_df["execution_time"].std(),
-            "med_queueing_time_ms":  task_type_task_df["time_spent_in_queue"].median(),
-            "mean_queueing_time_ms": task_type_task_df["time_spent_in_queue"].mean(),
-            "queueing_time_stddev": task_type_task_df["time_spent_in_queue"].std(),
-            "mean_batch_size": task_type_batch_df["batch_size"].mean(),
-            "batch_size_stddev": task_type_batch_df["batch_size"].std(),
-            "max_batch_size": task_type_batch_df["batch_size"].max(),
-            "min_batch_size": task_type_batch_df["batch_size"].min(),
-            "mean_arrival_at_worker_interval_ms": task_arrival_diffs.mean(),
-            # "arrival_at_worker_interval_stddev": task_arrival_diffs.std(),
-            "p95_arrival_at_worker_interval_ms": np.quantile(task_arrival_diffs, 0.95),
-            "mean_creation_to_exec_start_ms": job_creation_to_exec_start.mean()
-        }
+            job_creation_to_exec_start = task_type_batch_df[task_type_batch_df.apply(_is_batch_logged, axis=1)].apply(_parse_data, axis=1)
+            
+            task_type_df.loc[len(task_type_df)] = {
+                "client_id": client_id,
+                "workflow_id": task_type[0],
+                "task_id": task_type[1],
+                "med_e2e_latency_ms": (task_type_task_df["time_spent_in_queue"]+task_type_task_df["execution_time"]).median(),
+                "med_model_exec_time_ms": task_type_task_df["execution_time"].median(),
+                "mean_model_exec_time_ms": task_type_task_df["execution_time"].mean(),
+                "model_exec_time_stddev": task_type_task_df["execution_time"].std(),
+                "med_queueing_time_ms":  task_type_task_df["time_spent_in_queue"].median(),
+                "mean_queueing_time_ms": task_type_task_df["time_spent_in_queue"].mean(),
+                "queueing_time_stddev": task_type_task_df["time_spent_in_queue"].std(),
+                "mean_batch_size": task_type_batch_df["batch_size"].mean(),
+                "batch_size_stddev": task_type_batch_df["batch_size"].std(),
+                "max_batch_size": task_type_batch_df["batch_size"].max(),
+                "min_batch_size": task_type_batch_df["batch_size"].min(),
+                "mean_arrival_at_worker_interval_ms": task_arrival_diffs.mean(),
+                "mean_creation_to_exec_start_ms": job_creation_to_exec_start.mean()
+            }
     task_type_df.to_csv(os.path.join(out_path, "stats_by_task_type.csv"))
 
 def plot_model_loading_histogram(model_df, out_path):
@@ -313,24 +337,29 @@ if __name__ == "__main__":
     event_df = pd.read_csv(os.path.join(results_dir_path, 'events_by_time.csv'))
     batch_df = pd.read_csv(os.path.join(results_dir_path, 'batch_log.csv'))
     model_df = pd.read_csv(os.path.join(results_dir_path, "model_history_log.csv"))
+    drop_df = pd.read_csv(os.path.join(results_dir_path, "drop_log.csv"))
+
+    with open(os.path.join(results_dir_path, "stats.json")) as f:
+        all_stats = json.loads(f.read())['clients']
+        f.close()
 
     for w in set(task_df["workflow_type"]):
         for i in set(task_df[task_df["workflow_type"]==w]["task_id"]):
             os.makedirs(os.path.join(out_path, f"pipeline{int(w+1)}", f"task{int(i)}"), exist_ok=True)
 
-    plot_model_loading_histogram(model_df, out_path)
-    plot_model_eviction_histogram(model_df, out_path)
+    # plot_model_loading_histogram(model_df, out_path)
+    # plot_model_eviction_histogram(model_df, out_path)
 
-    plot_batch_size_bar_chart(batch_df, out_path, plot_title_prefix)
-    plot_batch_size_vs_batch_start(batch_df, out_path, plot_title_prefix)
-    plot_response_time_vs_arrival_time(job_df, out_path, plot_title_prefix)
+    # plot_batch_size_bar_chart(batch_df, out_path, plot_title_prefix)
+    # plot_batch_size_vs_batch_start(batch_df, out_path, plot_title_prefix)
+    plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plot_title_prefix)
     
-    stats_by_task_type(task_df, batch_df, job_df, out_path)
+    # stats_by_task_type(task_df, batch_df, job_df, out_path)
     
-    last_stop = round(batch_df["start_time"].max(), -3)
+    # last_stop = round(batch_df["start_time"].max(), -3)
     
-    for wf in set(batch_df["workflow_id"]):
-        for task_id in set(batch_df["task_id"]):
-            plot_batch_sizes(batch_df, task_id, last_stop, out_path, wf+1, sendrate, sched_name, node_count)
+    # for wf in set(batch_df["workflow_id"]):
+    #     for task_id in set(batch_df["task_id"]):
+    #         plot_batch_sizes(batch_df, task_id, last_stop, out_path, wf+1, sendrate, sched_name, node_count)
         # plot_latency_breakdown(pd.read_csv(os.path.join(out_path, "stats_by_task_type.csv")),
         #                        out_path, wf+1, sendrate, sched_name, node_count)
