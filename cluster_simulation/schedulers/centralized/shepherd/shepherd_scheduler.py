@@ -203,7 +203,7 @@ class ShepherdScheduler(Scheduler):
             for i in range(model_queue.qsize()-1, -1, -1):
                 for j in range(max_bsize-1, 0, -1):
                     ot = model_queue.queue[i]
-                    if (time + ot.task.model.batch_exec_times[24][j]) > ot.deadline * (1 + SLO_SLACK):
+                    if (time + ot.task.model.batch_exec_times[24][j]) > ot.deadline:
                         # on SLO violation, task [i] cannot be incl. in batch of size [j]
                         bsizes[i][j] = 0
                     elif i == (model_queue.qsize()-1): # if on last task and no SLO violation, always 1
@@ -247,7 +247,7 @@ class ShepherdScheduler(Scheduler):
                     first_deadline = ot.deadline
                 else:
                     # break once first task SLO cannot be satisfied anymore
-                    if (time + ot.task.model.batch_exec_times[24][len(tasks)]) > first_deadline * (1 + SLO_SLACK):
+                    if (time + ot.task.model.batch_exec_times[24][len(tasks)]) > first_deadline:
                         if pop: skipped_tasks.append(ot)
                         break
                     else:

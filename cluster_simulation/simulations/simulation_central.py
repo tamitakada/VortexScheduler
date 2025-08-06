@@ -48,7 +48,7 @@ class Simulation_central(Simulation):
         self.generate_all_jobs()
 
         last_time = 0
-        while (self.remaining_jobs - len(self.task_drop_log)) > 0:
+        while self.event_queue.qsize() > 0:
             cur_event = self.event_queue.get()
 
             if cur_event.event.should_abandon_event(cur_event.current_time, {}):
