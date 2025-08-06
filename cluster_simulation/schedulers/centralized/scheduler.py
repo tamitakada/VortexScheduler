@@ -1,5 +1,6 @@
 from core.job import Job
 from core.task import Task
+from core.batch import Batch
 from core.events import *
 
 
@@ -32,5 +33,11 @@ class Scheduler:
         """
             Schedules tasks that may be on queue without requiring
             newly arrived tasks.
+        """
+        raise NotImplementedError()
+    
+    def schedule_on_worker_batch_finish(self, worker: Worker, batch: Batch, current_time: float) -> list[EventOrders]:
+        """
+            Reacts to [worker] finishing [batch] execution.
         """
         raise NotImplementedError()

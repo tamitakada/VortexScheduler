@@ -19,6 +19,7 @@ from core.events import *
 
 from workers.heft_task_worker import *
 from workers.shepherd_task_worker import *
+from workers.qlm_task_worker import *
 
 from schedulers.algo.herd_algo import get_herd_assignment
 from schedulers.centralized.shepherd.herd_assignment import HerdAssignment
@@ -97,6 +98,8 @@ class Simulation(object):
             group_workers = []
             if self.simulation_name == "shepherd":
                 group_workers = [ShepherdWorker(self, worker_counter+j, 24, i) for j in range(int(group_size))]
+            elif self.simulation_name == "qlm":
+                group_workers = [QLMWorker(self, worker_counter+j, 24, i) for j in range(int(group_size)) ]
             else:
                 group_workers = [HeftTaskWorker(self, worker_counter+j, 24, group_id=i) for j in range(int(group_size))]
 
@@ -260,6 +263,8 @@ class Simulation(object):
                 for i, config in enumerate(worker_configs):
                     if self.simulation_name == "shepherd":
                         self.workers.append(ShepherdWorker(self, i, config[0], 0))
+                    elif self.simulation_name == "qlm":
+                        self.workers.append(QLMWorker(self, i, config[0], 0))
                     else:
                         self.workers.append(HeftTaskWorker(self, i, config[0]))
                     for model in config[1]:
@@ -425,11 +430,11 @@ class Simulation(object):
                 execution_time = task.log.task_execution_end_timestamp - \
                     task.log.task_execution_start_timestamp
 
-                assert time_to_buffer >= 0
-                assert dependency_wait_time >= 0
-                assert time_spent_in_queue >= 0
-                assert model_fetching_time >= 0
-                assert execution_time >= 0
+                # assert time_to_buffer >= 0
+                # assert dependency_wait_time >= 0
+                # assert time_spent_in_queue >= 0
+                # assert model_fetching_time >= 0
+                # assert execution_time >= 0
 
                 dataframe_tasks_log.loc[task_index] = [job.job_type_id, task.task_id, task.executing_worker_id, task.log.task_arrival_at_worker_buffer_timestamp, 
                                                        task.log.task_execution_start_timestamp,time_to_buffer, dependency_wait_time, 

@@ -80,6 +80,9 @@ class ShepherdScheduler(Scheduler):
             events += self._flex_schedule_tasks_on_arrival(group, current_time)
         return events
     
+    def schedule_on_worker_batch_finish(self, worker, batch, current_time):
+        return self.flex_schedule_on_batch_completion(worker, batch, current_time)
+    
     # STATE MANAGEMENT --------------------------------------------------------------------
     
     def worker_completed_batch(self, worker_id: int, batch: Batch):
