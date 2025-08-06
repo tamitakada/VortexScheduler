@@ -265,7 +265,7 @@ class ShepherdScheduler(Scheduler):
         """
         return Batch(self._form_largest_batch(model_id, time, pop=True))
 
-    def _flex_get_largest_candidate_batch(self, group: int, current_time: float):
+    def _flex_get_largest_candidate_batch(self, group: int, current_time: float, for_worker: Worker=None):
         """
             Returns (model_id, batch_size) of the largest batch that can be formed from currently 
             queued tasks across all of [model_queues] where model_id is required by some task in
@@ -278,6 +278,13 @@ class ShepherdScheduler(Scheduler):
             mid = get_model_id_for_task_type(task_type)
             if mid not in self.model_queues or self.model_queues[mid].qsize() == 0:
                 continue # no tasks queued
+
+            if for_worker:
+                if not ENABLE_DYNAMIC_MODEL_LOADING and all(s.model.model_id != mid for s in for_worker.GPU_state.state_at(current_time)):
+                    continue
+                    
+                if ENABLE_DYNAMIC_MODEL_LOADING and self.simulation.get_model_from_id(mid).model_size > for_worker.GPU_state._total_memory:
+                    continue
 
             largest_batch = self._form_largest_batch(mid, current_time)
             if len(largest_batch) > largest_batch_size:
@@ -293,14 +300,11 @@ class ShepherdScheduler(Scheduler):
             return []
 
         self.worker_completed_batch(worker.worker_id, completed_batch)
-
-        all_task_types = []
-        for m in worker.GPU_state.placed_models(current_time):
-            all_task_types += get_task_types_for_model(m.model_id)
         
         largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(
             self.herd_assignment.task_type_to_group[completed_batch.tasks[0].task_type], 
-            current_time)
+            current_time,
+            for_worker=worker)
 
         if largest_batch_size > 0:
             batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
