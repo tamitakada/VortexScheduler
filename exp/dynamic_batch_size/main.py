@@ -103,21 +103,18 @@ class Request:
 
 
 
-queue = SortedQueue()
-future_requests = SortedQueue()
+queue = SortedQueue(sort_by="deadline")
+future_requests = SortedQueue(sort_by="arrival_time")
 finished_requests = []
 
 
-current_batch = SortedQueue()
+current_batch = SortedQueue(sort_by="deadline")
 current_time = float (0)
 batch_finish_time = math.inf
 
 
 
-
-
 def fetch_new_requests(current_time: int, future_requests: SortedQueue, queue: SortedQueue):
-    
     new_reqs = []
     while len(future_requests) > 0 and future_requests[0].arrival_time <= current_time:
         req = future_requests.pop()
@@ -156,8 +153,10 @@ if __name__ == "__main__":
                        help='SLO factor multiplier for base latency (default: 5.0)')
     parser.add_argument('--max-batch-size', type=int, default=16,
                        help='Maximum batch size for scheduling (default: 16)')
-    parser.add_argument('--offline-num-reqs', type=int, default=0,
-                    help='Number of requests to simulate in the offline setting (default: 0)')
+    parser.add_argument('--num-reqs', type=int, default=0,
+                    help='Number of requests to simulate (default: 0)')
+    parser.add_argument('--offline', action='store_true',
+                       help='Enable preemption (default: False)')
     parser.add_argument('--output-file', type=str, default=None,
                        help='Custom output filename for logging (default: scheduler_name-preemption-trace_variation-slo_factor-max_batch_size.log)')
     parser.add_argument('--slo-csv', type=str, default=None,
@@ -168,7 +167,7 @@ if __name__ == "__main__":
     # Validate scheduler name
 
     if args.scheduler not in ['simple', 'dynamic']:
-        print(f"Error: Invalid scheduler name '{args.scheduler}'. Must be 'simple' or 'dynamic'.")
+        print(f"Error: Invalid scheduler ame '{args.scheduler}'. Must be 'simple' or 'dynamic'.")
         exit(1)
     
     # Validate trace variation arguments
@@ -206,7 +205,7 @@ if __name__ == "__main__":
             batch_runtimes[batch_size] = runtime
     # print(f"Batch runtimes: {batch_runtimes}")
     
-    # Read trace file
+    # Read arrival times
     trace_file_path = '../../workflow/azuretrace/llm_az_processed_trace.csv'
     if args.vary_trace == 'compress':
         arrival_times = generate_trace_with_simple_compression(trace_file_path, args.compress_ratio)
@@ -217,36 +216,32 @@ if __name__ == "__main__":
     else:
         logger.error(f"Invalid trace variation: {args.vary_trace}")
         exit(1)
-    
-    # Create requests from arrival times
+
+    num_reqs = args.num_reqs if args.num_reqs > 0 else len(arrival_times)
+
+
+    # read slo factors
+    slo_factors = []
     if args.slo_csv:
-        # Read SLO factors and arrival times from CSV file
-        logger.info(f"Reading SLO factors and arrival times from {args.slo_csv}")
         with open(args.slo_csv, mode='r', newline='') as csvfile:
             reader = csv.DictReader(csvfile)
             for row in reader:
-                request_id = int(row['request_id'])
-                slo_factor = float(row['slo_factor'])
-                arrival_time = float(row['arrival_time'])
-                
-                request = Request(arrival_time if args.offline_num_reqs == 0 else 0, request_id, slo_factor)
-                future_requests.append(request)
-                
-                if args.offline_num_reqs > 0 and request_id >= args.offline_num_reqs - 1:
-                    break
+                slo_factors.append(float(row['slo_factor']))
     else:
-        # Use original method with random SLO factors
-        for i, arrival_time in enumerate(arrival_times):
-            # random sample a slo factor between 1.5 and 25
+        for i in range(num_reqs):
             # slo_factor = random.uniform(1.5, 25)
-            slo_factor = args.slo_factor
-            
-            request = Request(arrival_time if args.offline_num_reqs == 0 else 0, i, slo_factor)
-            future_requests.append(request)
+            slo_factors.append(args.slo_factor)
 
-            if args.offline_num_reqs > 0 and i >= args.offline_num_reqs - 1:
-                break
     
+    # generate requests
+    for i in range(num_reqs):
+        arrival_time = arrival_times[i] if not args.offline else 0
+        slo_factor = slo_factors[i]
+        request = Request(arrival_time, i, slo_factor)
+        future_requests.append(request)
+
+    arrival_times = {req.id: req.arrival_time for req in future_requests}
+    # logger.info(f"arrival times: {arrival_times}")
     logger.info(f"Loaded {len(future_requests)} requests from the trace file")
 
 
@@ -280,7 +275,7 @@ if __name__ == "__main__":
     num_iters = 0;
 
 
-    if args.offline_num_reqs > 0:
+    if args.offline:
         fetch_new_requests(current_time, future_requests, queue)
         scheduler.offline_schedule(current_batch, queue, current_time, finished_requests)
     else:
@@ -306,7 +301,7 @@ if __name__ == "__main__":
                 logger.info(f"[New requests] {new_reqs}")
 
             logger.info(f"[Current batch] {[req.id for req in current_batch]}")
-            logger.info(f"[Queue] {[req.id for req in queue]}")
+            logger.info(f"[Queue] (size: {len(queue)}) {[req.id for req in queue]}")
             # logger.info(f"[Queue] {queue.requests}")
 
             # check if we need to do preemption
