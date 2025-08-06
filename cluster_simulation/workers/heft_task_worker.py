@@ -175,7 +175,7 @@ class HeftTaskWorker(TaskWorker):
 
 
                 # drop tasks whose SLO can't be met
-                if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline * (1 + SLO_SLACK):
+                if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline:
                     for job_task in task.job.tasks:
                         self.rm_task_in_queue_history(job_task, current_time)
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {

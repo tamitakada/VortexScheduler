@@ -12,9 +12,9 @@ class OrderedTask:
         self.task_arrival_time = current_time
 
         if SLO_GRANULARITY == "TASK":
-            self.deadline = current_time + task.slo
+            self.deadline = task.job.create_time + task.slo
         else:
-            self.deadline = current_time + task.job.slo
+            self.deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
 
     def __lt__(self, other):
         return self.deadline < other.deadline
