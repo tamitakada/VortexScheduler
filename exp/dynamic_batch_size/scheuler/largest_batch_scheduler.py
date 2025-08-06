@@ -49,99 +49,95 @@ class LargestBatchScheduler:
 
             return True
 
-    # def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
-    #     assert len(current_batch) == 0, f"Current batch is not empty: {current_batch}"
-
-    #     if len(queue) == 0:
-    #         return math.inf, None
-        
-    #     time_remaining = {req.id: req.deadline - current_time for req in queue}
-    #     time_remaining = sorted(time_remaining.items(), key=lambda x: x[1])
-    #     self.logger.info(f"Time remaining: {time_remaining}")
-    #     largest_time_remaining = time_remaining[-1][1]
-    #     assert self.batch_runtimes[1] <= largest_time_remaining, f"The time remaining is not large enough for the smallest batch runtime: {largest_time_remaining} < {self.batch_runtimes[1]}"
-    #     largest_batch_size = 0
-    #     while largest_batch_size+1 <= self.max_batch_size and largest_batch_size+1 <= len(queue) and self.batch_runtimes[largest_batch_size+1] <= time_remaining[-largest_batch_size-1][1]:
-    #         largest_batch_size += 1
-    #         self.logger.info(f"largest batch size: {largest_batch_size} req: {time_remaining[-largest_batch_size][0]} time remaining: {time_remaining[-largest_batch_size][1]} batch runtime: {self.batch_runtimes[largest_batch_size]}")
-
-    #     self.logger.info(f"largest time remaining: {largest_time_remaining} largest feasible batch size: {largest_batch_size}")
-
-    #     for i in range(largest_batch_size):
-    #         req_id = time_remaining[-largest_batch_size + i][0]
-    #         req = queue.get_by_id(req_id)
-    #         assert req is not None, f"Request {req_id} not found in queue: {queue}"
-    #         queue.remove(req)
-    #         current_batch.append(req)
-    #         # req.schedule(current_time, largest_batch_size, self.batch_runtimes[largest_batch_size])
-        
-    #     return math.inf, None
 
     def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
-        """
-        Find the largest feasible batch size where all requests can meet their latency SLOs.
-        For each batch size, check all possible subsets of the queue to find a feasible subset.
-        
-        Args:
-            current_batch: The current batch being built
-            queue: The queue of pending requests
-            current_time: Current simulation time
-            
-        Returns:
-            float: Next check time (math.inf if no batch scheduled)
-        """
-
         assert len(current_batch) == 0, f"Current batch is not empty: {current_batch}"
+
+        if len(queue) == 0:
+            return math.inf, None
         
-        # Find the largest feasible batch size
-        max_feasible_size = 0
-        best_subset = []
+        largest_time_remaining = queue.requests[-1].deadline - current_time
+        assert self.batch_runtimes[1] <= largest_time_remaining, f"The time remaining is not large enough for the smallest batch runtime: {largest_time_remaining} < {self.batch_runtimes[1]}"
+        largest_batch_size = 0
+        while largest_batch_size+1 <= self.max_batch_size and largest_batch_size+1 <= len(queue) and self.batch_runtimes[largest_batch_size+1] <= queue.requests[-largest_batch_size-1].deadline - current_time:
+            largest_batch_size += 1
+            req = queue.requests[-largest_batch_size]
+            self.logger.info(f"largest batch size: {largest_batch_size} req: {req.id} time remaining: {req.deadline - current_time} batch runtime: {self.batch_runtimes[largest_batch_size]}")
+
+        self.logger.info(f"largest time remaining: {largest_time_remaining} largest feasible batch size: {largest_batch_size}")
+
+        for i in range(largest_batch_size):
+            req = queue.pop_right()
+            current_batch.append(req)
+            # req.schedule(current_time, largest_batch_size, self.batch_runtimes[largest_batch_size])
         
-        # Convert queue to list for easier subset generation
-        queue_list = queue.requests
+        return math.inf, None
+
+    # def schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float) -> float:
+    #     """
+    #     Find the largest feasible batch size where all requests can meet their latency SLOs.
+    #     For each batch size, check all possible subsets of the queue to find a feasible subset.
         
-        for batch_size in range(1, min(self.max_batch_size + 1, len(queue) + 1)):
-            # Check if this batch size is feasible
-            feasible = False
+    #     Args:
+    #         current_batch: The current batch being built
+    #         queue: The queue of pending requests
+    #         current_time: Current simulation time
             
-            # Calculate batch duration for this size
-            batch_duration = self.batch_runtimes[batch_size]
+    #     Returns:
+    #         float: Next check time (math.inf if no batch scheduled)
+    #     """
+
+    #     assert len(current_batch) == 0, f"Current batch is not empty: {current_batch}"
+        
+    #     # Find the largest feasible batch size
+    #     max_feasible_size = 0
+    #     best_subset = []
+        
+    #     # Convert queue to list for easier subset generation
+    #     queue_list = queue.requests
+        
+    #     for batch_size in range(1, min(self.max_batch_size + 1, len(queue) + 1)):
+    #         # Check if this batch size is feasible
+    #         feasible = False
+            
+    #         # Calculate batch duration for this size
+    #         batch_duration = self.batch_runtimes[batch_size]
 
             
-            # Check all possible subsets of size batch_size
-            for subset in itertools.combinations(queue_list, batch_size):
-                subset_feasible = True
+    #         # Check all possible subsets of size batch_size
+    #         for subset in itertools.combinations(queue_list, batch_size):
+    #             subset_feasible = True
                 
-                # Check if all requests in this subset can meet their SLOs
-                for request in subset:
-                    # Calculate when this request would finish
-                    request_finish_time = current_time + batch_duration
+    #             # Check if all requests in this subset can meet their SLOs
+    #             for request in subset:
+    #                 # Calculate when this request would finish
+    #                 request_finish_time = current_time + batch_duration
                     
-                    # Check SLO violation: arrival_time + slo < finish_time
-                    if request.deadline < request_finish_time:
-                        subset_feasible = False
-                        break
+    #                 # Check SLO violation: arrival_time + slo < finish_time
+    #                 if request.deadline < request_finish_time:
+    #                     subset_feasible = False
+    #                     break
                 
-                if subset_feasible:
-                    feasible = True
-                    best_subset = list(subset)
-                    break  # Found a feasible subset for this batch size
+    #             if subset_feasible:
+    #                 feasible = True
+    #                 best_subset = list(subset)
+    #                 break  # Found a feasible subset for this batch size
             
-            if feasible:
-                max_feasible_size = batch_size
-            else:
-                # Once we find an infeasible batch size, larger sizes will also be infeasible
-                break
+    #         if feasible:
+    #             max_feasible_size = batch_size
+    #         else:
+    #             # Once we find an infeasible batch size, larger sizes will also be infeasible
+    #             break
         
-        # Build the batch using the best subset found
-        if max_feasible_size > 0 and best_subset:
-            # Remove the requests in best_subset from the queue and add to current_batch
-            for request in best_subset:
-                # Find and remove the request from the queue
-                queue.remove(request)
-                current_batch.append(request)
+    #     # Build the batch using the best subset found
+    #     if max_feasible_size > 0 and best_subset:
+    #         # Remove the requests in best_subset from the queue and add to current_batch
+    #         for request in best_subset:
+    #             # Find and remove the request from the queue
+    #             queue.remove(request)
+    #             current_batch.append(request)
                 
-        return math.inf, None
+    #     return math.inf, None
 
     def offline_schedule(self, current_batch: SortedQueue, queue: SortedQueue, current_time: float, finished_reqs: list) -> float:
         current_time = 0
