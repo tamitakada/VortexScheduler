@@ -137,6 +137,7 @@ class ShepherdScheduler(Scheduler):
             if curr_batch_size == 0:
                 # assign batch to best worker
                 batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                assert(batch.size() == largest_batch_size)
                 self.assign_batch_to_worker(next_worker.worker_id, batch)
                 events.append(EventOrders(
                     current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
@@ -146,6 +147,7 @@ class ShepherdScheduler(Scheduler):
             elif largest_batch_size >= FLEX_LAMBDA * curr_batch_size:
                 # assign batch to best worker
                 batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                assert(batch.size() == largest_batch_size)
                 old_batch_id = self.worker_states[next_worker.worker_id].id
                 self.preempt_batch_on_worker(next_worker.worker_id, batch)
                 events.append(EventOrders(
@@ -176,8 +178,9 @@ class ShepherdScheduler(Scheduler):
                     continue
                 # drop tasks whose SLOs can't be satisfied within a grace period
                 # earliest task end time >= deadline + grace period
-                if (time + ot.task.model.batch_exec_times[24][0]) > ot.deadline * (1 + SLO_SLACK):
+                if (time + ot.task.model.batch_exec_times[24][0]) > ot.deadline:
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                        "client_id": ot.task.job.client_id,
                         "job_id": ot.task.job_id,
                         "workflow_id": ot.task.task_type[0],
                         "task_id": ot.task.task_type[1],
@@ -192,26 +195,80 @@ class ShepherdScheduler(Scheduler):
             for ot in skipped_tasks:
                 model_queue.put(ot)
 
+    def _form_largest_batch(self, model_id: int, time: float, pop=False) -> list[Task]:
+        model_queue = self.model_queues[model_id]
+        if model_queue.qsize() == 0:
+            return []
+        tasks = []
+        max_bsize = model_queue.queue[0].task.max_batch_size
+        if SHEPHERD_BATCHING_POLICY == "OPTIMAL":
+            bsizes = [[0 for j in range(max_bsize)] for i in range(model_queue.qsize())]
+            for i in range(model_queue.qsize()-1, -1, -1):
+                for j in range(max_bsize-1, 0, -1):
+                    ot = model_queue.queue[i]
+                    if (time + ot.task.model.batch_exec_times[24][j]) > ot.deadline:
+                        # on SLO violation, task [i] cannot be incl. in batch of size [j]
+                        bsizes[i][j] = 0
+                    elif i == (model_queue.qsize()-1): # if on last task and no SLO violation, always 1
+                        bsizes[i][j] = 1
+                    else:
+                        bsizes[i][j] = max(bsizes[i+1][j-1] + 1, # either task [i] in batch of size [j]
+                                           bsizes[i+1][j])       # or not
+            
+            max_i, max_j, max_formable_bsize = 0, 0, 0
+            for i in range(len(bsizes)):
+                for j in range(len(bsizes[i])):
+                    if bsizes[i][j] > max_formable_bsize:
+                        max_formable_bsize = bsizes[i][j]
+                        max_i = i
+                        max_j = j
+            
+            counter = max_i
+            while counter < (max_i + max_j):
+                tasks.append(model_queue.queue[counter])
+                counter += 1
+            
+            if pop:
+                for task in tasks:
+                    model_queue.queue.remove(task)
+                model_queue.queue.sort()
+
+            return [ot.task for ot in tasks]
+
+        first_deadline = 0
+        skipped_tasks = []
+        model_queue = self.model_queues[model_id]
+        curr_queue_idx = 0
+        while ((pop and model_queue.qsize() > 0) or (not pop and curr_queue_idx < model_queue.qsize())) and len(tasks) < max_bsize:
+            ot = model_queue.get() if pop else model_queue.queue[curr_queue_idx]
+
+            if SHEPHERD_BATCHING_POLICY == "BEST_EXEC_TIME_ONLY":
+                tasks.append(ot.task)
+            elif SHEPHERD_BATCHING_POLICY == "FIRST_TASK_DEADLINE":
+                if len(tasks) == 0:
+                    tasks.append(ot.task)
+                    first_deadline = ot.deadline
+                else:
+                    # break once first task SLO cannot be satisfied anymore
+                    if (time + ot.task.model.batch_exec_times[24][len(tasks)]) > first_deadline:
+                        if pop: skipped_tasks.append(ot)
+                        break
+                    else:
+                        tasks.append(ot.task)
+                        
+            curr_queue_idx += 1
+        
+        for ot in skipped_tasks:
+            model_queue.put(ot)
+        return tasks
+
     def _flex_form_largest_batch(self, model_id: int, time: float) -> Batch:
         """
             Form the largest batch available in [self.model_queues[model_id]].
         """
-        tasks = []
-        skipped_tasks = []
-        model_queue = self.model_queues[model_id]
-        while model_queue.qsize() > 0:
-            ot = model_queue.get()
-            if time < ot.task.log.task_placed_on_worker_queue_timestamp:
-                skipped_tasks.append(ot)
-                continue
-            tasks.append(ot.task)
-            if len(tasks) == tasks[0].max_batch_size:
-                break
-        for ot in skipped_tasks:
-            model_queue.put(ot)
-        return Batch(tasks)
+        return Batch(self._form_largest_batch(model_id, time, pop=True))
 
-    def _flex_get_largest_candidate_batch(self, group: int, current_time: float):
+    def _flex_get_largest_candidate_batch(self, group: int, current_time: float, for_worker: Worker=None):
         """
             Returns (model_id, batch_size) of the largest batch that can be formed from currently 
             queued tasks across all of [model_queues] where model_id is required by some task in
@@ -224,10 +281,17 @@ class ShepherdScheduler(Scheduler):
             mid = get_model_id_for_task_type(task_type)
             if mid not in self.model_queues or self.model_queues[mid].qsize() == 0:
                 continue # no tasks queued
-            candidate_batch_size = min(len([t for t in self.model_queues[mid].queue if current_time >= t.task.log.task_placed_on_worker_queue_timestamp]),
-                                       self.model_queues[mid].queue[0].task.max_batch_size)
-            if candidate_batch_size > largest_batch_size:
-                largest_batch_size = candidate_batch_size
+
+            if for_worker:
+                if not ENABLE_DYNAMIC_MODEL_LOADING and all(s.model.model_id != mid for s in for_worker.GPU_state.state_at(current_time)):
+                    continue
+                    
+                if ENABLE_DYNAMIC_MODEL_LOADING and self.simulation.get_model_from_id(mid).model_size > for_worker.GPU_state._total_memory:
+                    continue
+
+            largest_batch = self._form_largest_batch(mid, current_time)
+            if len(largest_batch) > largest_batch_size:
+                largest_batch_size = len(largest_batch)
                 largest_batch_model_id = mid
         return (largest_batch_model_id, largest_batch_size)
 
@@ -239,14 +303,11 @@ class ShepherdScheduler(Scheduler):
             return []
 
         self.worker_completed_batch(worker.worker_id, completed_batch)
-
-        all_task_types = []
-        for m in worker.GPU_state.placed_models(current_time):
-            all_task_types += get_task_types_for_model(m.model_id)
         
         largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(
             self.herd_assignment.task_type_to_group[completed_batch.tasks[0].task_type], 
-            current_time)
+            current_time,
+            for_worker=worker)
 
         if largest_batch_size > 0:
             batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)

@@ -103,7 +103,7 @@ class HeftTaskWorker(TaskWorker):
                 events += batch_end_events
         else:
             all_task_types = get_task_types(self.simulation.job_types_list)
-            self.next_task_type_idx = all_task_types.index(task_type)
+            # self.next_task_type_idx = all_task_types.index(task_type)
             task_types_left = len(all_task_types)
             batch_end_events = []
             while not batch_end_events and task_types_left:
@@ -175,10 +175,11 @@ class HeftTaskWorker(TaskWorker):
 
 
                 # drop tasks whose SLO can't be met
-                if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline * (1 + SLO_SLACK):
+                if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline:
                     for job_task in task.job.tasks:
                         self.rm_task_in_queue_history(job_task, current_time)
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                        "client_id": task.job.client_id,
                         "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
                         "drop_time": current_time, 
                         "arrival_time": task_arrival,

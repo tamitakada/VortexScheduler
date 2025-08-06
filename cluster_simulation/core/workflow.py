@@ -23,9 +23,17 @@ WORKFLOW_LIST = [
                 "MAX_EMIT_BATCH_SIZE": 4,
                 "MAX_WAIT_TIME": 1,         # ms
                 "BATCH_SIZES": [1, 2, 3, 4],
-                "BATCH_EXEC_TIME": [9.15, 12.16, 16.57, 21.50],
-                "MIG_BATCH_EXEC_TIMES": {6: [9.15, 12.16, 16.57, 21.50],
-                                         24: [9.15, 12.16, 16.57, 21.50]},
+
+                # concurrency
+                # "BATCH_EXEC_TIME": [9.15, 12.16, 16.57, 21.50],
+                # "MIG_BATCH_EXEC_TIMES": {6: [9.15, 12.16, 16.57, 21.50],
+                #                          24: [9.15, 12.16, 16.57, 21.50]},
+
+                # no concurrency
+                "BATCH_EXEC_TIME": [7.10, 8.38, 10.29, 13.16],
+                "MIG_BATCH_EXEC_TIMES": {6: [7.10, 8.38, 10.29, 13.16],
+                                         24: [7.10, 8.38, 10.29, 13.16]},
+
                 "EXEC_TIME_CV": 0.06,
                 "SLO": 50},
                {"MODEL_NAME": "vision_encoder",

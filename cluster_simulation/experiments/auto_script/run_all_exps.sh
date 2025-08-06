@@ -19,13 +19,14 @@ run_experiment() {
         -e "s/^FLEX_LAMBDA = .*$/FLEX_LAMBDA = ${cfg_prop_list[10]}/" \
         -e "s/^HERD_K = .*$/HERD_K = ${cfg_prop_list[11]}/" \
         -e "s/^HERD_PERIODICITY = .*$/HERD_PERIODICITY = ${cfg_prop_list[12]}/" \
-        -e "s/^SLO_SLACK = .*$/SLO_SLACK = ${cfg_prop_list[13]}/" \
-        -e "s/^SLO_GRANULARITY = .*$/SLO_GRANULARITY = ${cfg_prop_list[14]}/" \
-        -e "s/^ENABLE_MULTITHREADING = .*$/ENABLE_MULTITHREADING = ${cfg_prop_list[15]}/" \
-        -e "s/^ENABLE_MODEL_PREFETCH = .*$/ENABLE_MODEL_PREFETCH = ${cfg_prop_list[16]}/" \
-        -e "s/^ENABLE_DYNAMIC_MODEL_LOADING = .*$/ENABLE_DYNAMIC_MODEL_LOADING = ${cfg_prop_list[17]}/" \
-        -e "s/^ALLOCATION_STRATEGY = .*$/ALLOCATION_STRATEGY = '${cfg_prop_list[18]}'/" \
-        -e "s/^CUSTOM_ALLOCATION = .*$/CUSTOM_ALLOCATION = ${cfg_prop_list[19]}/" \
+        -e "s/^SHEPHERD_BATCHING_POLICY = .*$/SHEPHERD_BATCHING_POLICY = ${cfg_prop_list[13]}/" \
+        -e "s/^SLO_SLACK = .*$/SLO_SLACK = ${cfg_prop_list[14]}/" \
+        -e "s/^SLO_GRANULARITY = .*$/SLO_GRANULARITY = ${cfg_prop_list[15]}/" \
+        -e "s/^ENABLE_MULTITHREADING = .*$/ENABLE_MULTITHREADING = ${cfg_prop_list[16]}/" \
+        -e "s/^ENABLE_MODEL_PREFETCH = .*$/ENABLE_MODEL_PREFETCH = ${cfg_prop_list[17]}/" \
+        -e "s/^ENABLE_DYNAMIC_MODEL_LOADING = .*$/ENABLE_DYNAMIC_MODEL_LOADING = ${cfg_prop_list[18]}/" \
+        -e "s/^ALLOCATION_STRATEGY = .*$/ALLOCATION_STRATEGY = '${cfg_prop_list[19]}'/" \
+        -e "s/^CUSTOM_ALLOCATION = .*$/CUSTOM_ALLOCATION = ${cfg_prop_list[20]}/" \
         auto_script/config_template.py
 
     # remove quotes
@@ -33,7 +34,7 @@ run_experiment() {
     
     cp auto_script/config_template.py ../core/config.py
 
-    python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" > log.txt
+    python3 run_experiment.py -t "${cfg_prop_list[1]}" -o $root_dir/"${cfg_prop_list[2]}" &> log.txt
 
     mv log.txt $root_dir/"${cfg_prop_list[2]}"
     cp ../core/config.py $root_dir/"${cfg_prop_list[2]}"
@@ -65,7 +66,7 @@ while read -r property; do
         clone_num=$((i % 5 + 1))
         echo "Current clone: $clone_num"
 
-        if [[ "$clone_num" -eq "0" && "$i" -ne "0" ]]; then
+        if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then
             echo "Waiting for previous to finish..."
             wait
         fi
@@ -91,6 +92,11 @@ done <<< "$configs_out"
 if [ "${#prop_list[@]}" -gt 0 ]; then
     clone_num=$((i % 5 + 1))
     echo "Current clone: $clone_num"
+
+    if [[ "$clone_num" -eq "1" && "$i" -ne "0" ]]; then
+        echo "Waiting for previous to finish..."
+        wait
+    fi
 
     cd $root_dir/exps/$clone_num/VortexScheduler
     cd cluster_simulation

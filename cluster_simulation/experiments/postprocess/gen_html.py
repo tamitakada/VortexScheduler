@@ -8,7 +8,16 @@ TABLE_CSS = """
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=arrow_upward" />
     <style>
+        .material-symbols-outlined {
+            font-variation-settings:
+            'FILL' 0,
+            'wght' 400,
+            'GRAD' 0,
+            'opsz' 24
+        }
+
         * {
             margin: 0;
             padding: 0;
@@ -63,11 +72,24 @@ TABLE_CSS = """
             font-size: 14pt;
         }
 
+        h3 {
+            font-size: 12pt;
+        }
+
         th:first-child {
             position: sticky;
             left: 0;
             border: 1px solid black;
             z-index: 10;
+        }
+
+        #to-top-button {
+            background-color: rgba(18, 61, 135, 0.7);
+            width: 70px; height: 90px;
+            position: fixed; right: 20px; bottom: 20px;
+            border-radius: 5px;
+            display: inline-flex; flex-direction: column; align-items: center; justify-content: center;
+            text-decoration: none; color: white; text-align: center; v-align: center;
         }
     
     </style>
@@ -87,11 +109,23 @@ def generate_menu(df: pd.DataFrame):
 
 def generate_comparison_table(df: pd.DataFrame, out_path: str):
     html_str = "<html><head>" + TABLE_CSS + "</head><body>" + generate_menu(df)
+    html_str += """
+        <a id='to-top-button' href='#'>
+            <span class='material-symbols-outlined'>
+                arrow_upward
+            </span>
+            <p>to<br>top</p>
+        </a>
+    """
     
     for group in df["group"].unique():
         html_str += f"""
         <div id={group.replace(' ', '_').lower()} class='table-title-div'><h2>{group}</h2></div>
+        <h3 style='margin: 5px 0;'>Stats across all steps</h3>
         <div style='overflow-x: scroll;'>
+        """
+
+        by_job_type_table = """
         <table style='margin-bottom: 10px;'>
             <tr>
                 <th>Scheduler</th>
@@ -110,6 +144,21 @@ def generate_comparison_table(df: pd.DataFrame, out_path: str):
             </tr>
         """
 
+        by_task_type_table = """
+        <h3 style='margin: 5px 0;'>Stats per step</h3>
+        <table style='margin-bottom: 20px;'>
+            <tr>
+                <th>Scheduler</th>
+                <th>Task Type</th>
+                <th>Median latency (ms)</th>
+                <th>Mean latency (ms)</th>
+                <th>Median batch size</th>
+                <th>Mean batch size</th>
+                <th>Min batch size</th>
+                <th>Max batch size</th>
+            </tr>
+        """
+
         for i, row in df[df["group"]==group].iterrows():
             scheduler_name = row["scheduler"]
 
@@ -117,9 +166,11 @@ def generate_comparison_table(df: pd.DataFrame, out_path: str):
                 scheduler_stats = json.loads(f.read())
                 f.close()
 
+            batch_df = pd.read_csv(os.path.join(row["path_to_data"], "batch_log.csv"))
+
             if len(scheduler_stats["clients"]) == 1 and len(scheduler_stats["clients"][0].keys()) == 1:
                 scheduler_stats = list(scheduler_stats["clients"][0].values())[0]
-                html_str += f"""<tr>
+                by_job_type_table += f"""<tr>
                     <th style='text-align: left;'>{scheduler_name}</th>
                     <td>{scheduler_stats['throughput_qps']:.2f}</td>
                     <td>{scheduler_stats['goodput_qps']:.2f}</td>
@@ -134,8 +185,26 @@ def generate_comparison_table(df: pd.DataFrame, out_path: str):
                     <td>{scheduler_stats['total_num_dropped']}</td>
                     <td>{scheduler_stats['total_num_tardy']}</td>
                 </tr>"""
+
+                task_types = list(map(tuple, batch_df[['workflow_id', 'task_id']].drop_duplicates().values))
+                for task_type in task_types:
+                    batch_df_tt = batch_df[(batch_df["workflow_id"]==task_type[0]) & (batch_df["task_id"]==task_type[1])]
+                    batch_exec_times = batch_df_tt['end_time']-batch_df['start_time']
+                    by_task_type_table += f"""<tr>
+                        <th style='text-align: left;'>{scheduler_name}</th>
+                        <th style='text-align: left;'>{int(task_type[0])}, {int(task_type[1])}</td>
+                        <td>{batch_exec_times.median():.2f}</td>
+                        <td>{batch_exec_times.mean():.2f}</td>
+                        <td>{batch_df_tt['batch_size'].median()}</td>
+                        <td>{batch_df_tt['batch_size'].mean():.2f}</td>
+                        <td>{batch_df_tt['batch_size'].min()}</td>
+                        <td>{batch_df_tt['batch_size'].max()}</td>
+                    </tr>"""
         
-        html_str += "</table></div>"
+        by_job_type_table += "</table></div>"
+        by_task_type_table += "</table></div>"
+
+        html_str += by_job_type_table + by_task_type_table
 
     html_str += "</body></html>"
 
