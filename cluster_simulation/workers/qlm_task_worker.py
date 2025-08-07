@@ -7,7 +7,7 @@ from core.events import *
 import numpy as np
 
 
-class ShepherdWorker(TaskWorker):
+class QLMWorker(TaskWorker):
     
     def free_slot(self, current_time, batch: Batch, task_type):
         """ Attempts to launch another task. """
@@ -25,16 +25,11 @@ class ShepherdWorker(TaskWorker):
     
     def preempt_batch(self, old_batch_id: int, new_batch: Batch, current_time: float):
         evicted_batch = self.evict_batch(old_batch_id, current_time)
-
-        if self.can_run_task(current_time, new_batch.model) == self._CAN_RUN_ON_EVICT:
+        if self.can_run_task(current_time, new_batch.model, abort_fetch=True) == self._CAN_RUN_ON_EVICT:
             current_time += self.evict_models_from_GPU_until(
                 current_time, new_batch.model.model_size, self.FCFS_EVICTION)
-
         events, _ = self.batch_execute(new_batch, current_time)
         assert(events)
-        events.append(EventOrders(
-            current_time + CPU_to_CPU_delay(evicted_batch.tasks[0].input_size * evicted_batch.size()), 
-            TasksArrivalAtScheduler(self.simulation, evicted_batch.tasks)))
         return events
 
     #  ---------------------------  Subsequent TASK Transfer   --------------------

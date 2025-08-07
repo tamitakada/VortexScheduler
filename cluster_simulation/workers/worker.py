@@ -106,7 +106,7 @@ class Worker(object):
         """
         curr_memory = self.GPU_state.available_memory(current_time)
        
-        placed_model_states = self.GPU_state.placed_model_states(current_time)
+        model_states = self.GPU_state.state_at(current_time)
         if policy == self.LOOKAHEAD_EVICTION:
             # TODO: try different eviction policies
             raise NotImplementedError("No lookahead yet")
@@ -118,7 +118,7 @@ class Worker(object):
             # )
 
         models_to_evict = []
-        for state in placed_model_states:
+        for state in model_states:
             if not state.reserved_batch:
                 curr_memory += state.model.model_size
                 models_to_evict.append(state.model)
@@ -135,7 +135,7 @@ class Worker(object):
                     for i in range(len(models_to_evict)):
                         self.simulation.metadata_service.rm_model_cached_location(
                             models_to_evict[i], self.worker_id, current_time)
-                        self.GPU_state.evict_model(models_to_evict[i], current_time, 0)
+                        self.GPU_state.evict_model(models_to_evict[i], current_time, 0, abort_fetch=True)
                         
                         self.model_history_log.loc[len(self.model_history_log)] = {
                             "start_time": current_time,
@@ -150,7 +150,7 @@ class Worker(object):
     _CAN_RUN_ON_EVICT = 1
     _CANNOT_RUN = 2
 
-    def can_run_task(self, current_time: float, model: Model) -> int:
+    def can_run_task(self, current_time: float, model: Model, abort_fetch=False) -> int:
         """
             Returns _CAN_RUN_NOW if model None, or model is on GPU and not currently in use.
             Returns _CAN_RUN_ON_EVICT if model can be loaded onto the GPU upon evicting
@@ -167,7 +167,7 @@ class Worker(object):
         if self.GPU_state.can_fetch_model(model, current_time):
             return self._CAN_RUN_NOW
         
-        if self.GPU_state.can_fetch_model_on_eviction(model, current_time):
+        if self.GPU_state.can_fetch_model_on_eviction(model, current_time, abort_fetch=abort_fetch):
             return self._CAN_RUN_ON_EVICT
         
         return self._CANNOT_RUN

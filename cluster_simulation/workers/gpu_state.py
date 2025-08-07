@@ -89,7 +89,7 @@ class GPUState(object):
         """
         return self.available_memory(time) >= model.model_size
     
-    def can_fetch_model_on_eviction(self, model: Model, time: float) -> bool:
+    def can_fetch_model_on_eviction(self, model: Model, time: float, abort_fetch=False) -> bool:
         """
             Return True if a new copy of [model] can be fetched to the GPU
             upon evicting some number of placed models not in use.
@@ -97,7 +97,8 @@ class GPUState(object):
         # cannot use space occupied by models currently being fetched/evicted or used
         return (self.available_memory(time) + \
                 sum(state.size for state in self.state_at(time)
-                    if state.state == ModelState.PLACED and not state.reserved_batch)) >= model.model_size
+                    if (state.state == ModelState.PLACED or (abort_fetch and state.state == ModelState.IN_FETCH)) and \
+                        not state.reserved_batch)) >= model.model_size
 
     def prefetch_model(self, model: Model):
         """
@@ -180,21 +181,20 @@ class GPUState(object):
                                                                              reserved_until=reserve_until)) if t < fetch_end_time else None)
 
     
-    def evict_model(self, model: Model, start_time: float, evict_time: float, reserve_until=-1):
+    def evict_model(self, model: Model, start_time: float, evict_time: float, reserve_until=-1, abort_fetch=False):
         """
             Evicts [model] starting at [start_time] in [evict_time] time.
             Reserves evicted space until [reserve_until]. This prevents other models
             from being loaded in space that may be intended to fetch a specific model.
             Does not reserve if [reserve_until] < 0.
         """
-        assert(model in self.placed_models(start_time))
-
         eviction_end_time = start_time + evict_time
 
         # remove model from all later timestamps
         def _remove_model(timestamp, states):
             for state in states:
-                if state.state == ModelState.PLACED and state.model == model:
+                if (state.state == ModelState.PLACED or (abort_fetch and state.state == ModelState.IN_FETCH)) and \
+                    state.model == model:
                     states.remove(state)
                     return
             assert(False)
