@@ -104,60 +104,32 @@ class ShepherdScheduler(Scheduler):
 
     def _flex_schedule_tasks_on_arrival(self, group, current_time):
         self._drop_bad_tasks(current_time)
-
         events = []
-        
-        unassigned_workers = self.herd_assignment.worker_groups[group].copy()
-        unassigned_workers = unassigned_workers[self.next_worker_idxs[group]:] + unassigned_workers[:self.next_worker_idxs[group]]
-
-        worker_idx = 0
-
-        largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(group, current_time)
-        while worker_idx < len(unassigned_workers) and largest_batch_size > 0:
-            next_worker = unassigned_workers[worker_idx]
-            
-            if not ENABLE_DYNAMIC_MODEL_LOADING:
-                if all(m.model_id != largest_batch_model_id for m in next_worker.GPU_state.placed_models(current_time)):
-                    worker_idx += 1
-                    continue
-            
-            # when it is impossible for worker to load model for some reason
-            if next_worker.get_wait_time(current_time, largest_batch_model_id) == np.inf:
-                worker_idx += 1
-                continue
-
-            # TODO: allow shepherd workers to run concurrent models
-            # NOTE: workers are assumed to run only 1 batch at a time
-            curr_batch = self.worker_states[next_worker.worker_id]
+        group_workers = self.herd_assignment.worker_groups[group].copy()
+        ordered_group_workers = group_workers[self.next_worker_idxs[group]:] + group_workers[:self.next_worker_idxs[group]]
+        for worker in ordered_group_workers:
+            curr_batch = self.worker_states[worker.worker_id]
             curr_batch_size = curr_batch.size() if not curr_batch is None else 0
 
-            if curr_batch_size == 0:
-                # assign batch to best worker
-                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
-                assert(batch.size() == largest_batch_size)
-                self.assign_batch_to_worker(next_worker.worker_id, batch)
-                events.append(EventOrders(
-                    current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
-                    BatchArrivalAtWorker(self.simulation, next_worker, batch)))
-                # update candidate batch
-                largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(group, current_time)
-            elif largest_batch_size >= FLEX_LAMBDA * curr_batch_size:
-                # assign batch to best worker
-                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
-                assert(batch.size() == largest_batch_size)
-                old_batch_id = self.worker_states[next_worker.worker_id].id
-                self.preempt_batch_on_worker(next_worker.worker_id, batch)
-                events.append(EventOrders(
-                    current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
-                    BatchPreemptionAtWorker(self.simulation, next_worker, batch, old_batch_id)))
-                # update candidate batch
-                largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(group, current_time)
-            
-            # remove worker from consideration
-            worker_idx += 1
+            largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(group, current_time, for_worker=worker)
 
-        self.next_worker_idxs[group] = (self.next_worker_idxs[group] + worker_idx) % len(self.next_worker_idxs)
-        
+            if curr_batch_size == 0 and largest_batch_size > 0:
+                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                assert(batch.size() == largest_batch_size)
+                self.assign_batch_to_worker(worker.worker_id, batch)
+                events.append(EventOrders(
+                    current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
+                    BatchArrivalAtWorker(self.simulation, worker, batch)))
+            elif largest_batch_size > 0 and largest_batch_size >= FLEX_LAMBDA * curr_batch_size:
+                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                assert(batch.size() == largest_batch_size)
+                old_batch_id = self.worker_states[worker.worker_id].id
+                self.preempt_batch_on_worker(worker.worker_id, batch)
+                events.append(EventOrders(
+                    current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
+                    BatchPreemptionAtWorker(self.simulation, worker, batch, old_batch_id)))
+        # next time start from next worker in group
+        self.next_worker_idxs[group] = (self.next_worker_idxs[group] + 1) % len(group_workers)
         return events
     
     def _drop_bad_tasks(self, time: float):
