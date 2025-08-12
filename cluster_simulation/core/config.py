@@ -11,10 +11,10 @@ VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [95, 125],
-         "SEND_RATE_CHANGE_INTERVALS": [1500], 
-         "SLO": 100}}, # in ms
+    {0: {"NUM_JOBS": 10000,
+         "SEND_RATES": [95],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": 303}}, # in ms
     # {0: {"NUM_JOBS": 1000,
     #      "SEND_RATES": [55, 95],
     #      "SEND_RATE_CHANGE_INTERVALS": [500], # in queries since last change
@@ -39,14 +39,25 @@ HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 
 
+"""  -------        QLM Parameters  --------- """
+
+QLM_REORDER_POLICY = "LP"   # EDF | LP
+QLM_ENABLE_DROP = False
+
+# NOTE: QLM requires Gurobi WLS license
+GUROBI_WLSACCESSID = ""     # str
+GUROBI_WLSSECRET = ""       # str
+GUROBI_LICENSEID = 0        # int
+
+
 """  -------        General Scheduling Parameters  --------- """
 
 SLO_SLACK = 0.1
 SLO_GRANULARITY = "JOB" # TASK | JOB
 
 ENABLE_MULTITHREADING = False # allow multiple models on same partition to run at once
-ENABLE_MODEL_PREFETCH = True
-ENABLE_DYNAMIC_MODEL_LOADING = True
+ENABLE_MODEL_PREFETCH = False
+ENABLE_DYNAMIC_MODEL_LOADING = False
 
 # HERD | VORTEX | CUSTOM
 # NOTE: HERD requires ENABLE_DYNAMIC_MODEL_LOADING
