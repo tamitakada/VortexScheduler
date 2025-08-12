@@ -18,9 +18,13 @@ import json
 def plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plot_title_prefix):
     client_ids = sorted(set(job_df["client_id"]))
     nrows = math.ceil(len(client_ids) / 2)
+    ncols = 1 if len(client_ids) == 1 else 2
 
-    fig, axes = plt.subplots(nrows, 2, figsize=(6 * 2, 4 * nrows))
-    axes = axes.flatten()
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    if ncols > 1:
+        axes = axes.flatten()
+    else:
+        axes = [axes]
 
     for i, client_id in enumerate(client_ids):
         client_df = job_df[job_df["client_id"]==client_id]
@@ -50,17 +54,20 @@ def plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plo
             
             axes[i].axhline(y=slo, color='red', linestyle='--', linewidth=1, label="SLO")
             axes[i].axhline(y=(slo * slo_multiplier), color='orange', linestyle='--', linewidth=1, label="Late deadline")
-            axes[i].set_title(f"Client {client_id}")
+            
+            if ncols > 1:
+                axes[i].set_title(f"Client {client_id}")
+            
             axes[i].set_xlabel("Job arrival time (s since start)")
             axes[i].set_ylabel("Response time (ms)")
 
             axes[i].legend()
     
-    for i in range(4):
+    for i in range(nrows * ncols):
         if i >= len(client_ids):
             axes[i].set_visible(False)
 
-    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
     fig.suptitle(f"{plot_title_prefix}\nJob Response Time vs. Arrival Time by Client")
     plt.savefig(os.path.join(out_path, "response_vs_arrival.pdf"))
     plt.close()
@@ -354,7 +361,7 @@ if __name__ == "__main__":
     # plot_batch_size_vs_batch_start(batch_df, out_path, plot_title_prefix)
     plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plot_title_prefix)
     
-    # stats_by_task_type(task_df, batch_df, job_df, out_path)
+    stats_by_task_type(task_df, batch_df, job_df, out_path)
     
     # last_stop = round(batch_df["start_time"].max(), -3)
     
