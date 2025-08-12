@@ -24,3 +24,12 @@ class Group:
 
     def __hash__(self):
         return hash(self.group_id)
+    
+    def __eq__(self, value):
+        return type(value) == Group and value.group_id == self.group_id
+    
+    def __str__(self):
+        return f"[GROUP {self.group_id} : SLO {self.slo} : MID {self.model.model_id}]: <{[t.job_id for t in self.tasks]}>"
+    
+    def __repr__(self):
+        return self.__str__()

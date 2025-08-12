@@ -349,9 +349,9 @@ class Simulation(object):
                                  j.end_time <= j.create_time + (j.slo * (1 + SLO_SLACK))]
                     
                     stats_dict["clients"][-1][job_type][f"jobs_within_{1+SLO_SLACK}slo_per_sec"] = _get_jobs_per_sec(nontardy_jobs + tardy_jobs)
-                    stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
+                    stats_dict["clients"][-1][job_type]["total_num_tardy_within_slack"] = len(tardy_jobs)
 
-                    job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]
+                    job_tardiness = [j.end_time - (j.create_time + j.slo) for j in completed_jobs]
                     stats_dict["clients"][-1][job_type]["median_tardiness_ms"] = np.median(job_tardiness)
                     stats_dict["clients"][-1][job_type]["mean_tardiness_ms"] = np.mean(job_tardiness)
                     stats_dict["clients"][-1][job_type]["std_tardiness_ms"] = np.std(job_tardiness)
@@ -370,37 +370,6 @@ class Simulation(object):
         
         self.sim_stats_log = stats_dict
 
-        # completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
-
-        # # 1. Get the completed job list to compute statistics 
-        # completed_jobs = [j for j in self.jobs.values() if len(
-        #     j.completed_tasks) == len(j.tasks)]
-        # print_end_jobs(last_time, completed_jobs, self.jobs)
-        # # 2. Compute the metrics of interest
-        # response_times = [job.end_time -
-        #                        job.create_time for job in completed_jobs]
-        # slow_down_rate = [(job.end_time - job.create_time) /
-        #                        WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"] for job in completed_jobs]
-        # print_response_time(response_times)
-        # print_slowdown(slow_down_rate)
-        # ADFG_created = []
-        # for job in completed_jobs:
-        #     if job.ADFG not in ADFG_created:
-        #         ADFG_created.append(job.ADFG)
-        #         # print(job.job_type_id , job.ADFG)
-        # print(".... number of DAG created: {}".format(len(ADFG_created)))
-        # print_involved_workers(self.workers)
-        # if by_job_type:
-        #     response_time_per_type = {}
-        #     slow_down_per_type = {}
-        #     for job in completed_jobs:
-        #         if job.job_type_id not in response_time_per_type:
-        #             response_time_per_type[job.job_type_id] = []
-        #             slow_down_per_type[job.job_type_id] = []
-        #         response_time_per_type[job.job_type_id].append(job.end_time - job.create_time)
-        #         slow_down_per_type[job.job_type_id].append((job.end_time - job.create_time) / WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"])
-        #     # print statistics for each job type
-        #     print_stats_by_job_type(response_time_per_type, slow_down_per_type)
         if self.produce_breakdown:
             all_completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
             self.produce_time_breakdown_results(all_completed_jobs)
@@ -409,7 +378,7 @@ class Simulation(object):
 
         dataframe = pd.DataFrame(columns=["job_id", "client_id", "load_info_staleness", "placement_info_staleness",
                                           "workflow_type", "job_create_time", "scheduler_type", "slowdown", "response_time"])
-        dataframe_tasks_log = pd.DataFrame(columns=["workflow_type", "task_id", "worker_id", "task_arrival_time", "task_start_exec_time", "time_to_buffer", "dependency_wait_time",
+        dataframe_tasks_log = pd.DataFrame(columns=["workflow_type", "job_id", "task_id", "worker_id", "task_arrival_time", "task_start_exec_time", "time_to_buffer", "dependency_wait_time",
                                                     "time_spent_in_queue", "model_fetching_time", "execution_time"])
 
         for index, completed_job in enumerate(completed_jobs):
@@ -442,7 +411,7 @@ class Simulation(object):
                 # assert model_fetching_time >= 0
                 # assert execution_time >= 0
 
-                dataframe_tasks_log.loc[task_index] = [job.job_type_id, task.task_id, task.executing_worker_id, task.log.task_arrival_at_worker_buffer_timestamp, 
+                dataframe_tasks_log.loc[task_index] = [job.job_type_id, task.job_id, task.task_id, task.executing_worker_id, task.log.task_arrival_at_worker_buffer_timestamp, 
                                                        task.log.task_execution_start_timestamp,time_to_buffer, dependency_wait_time, 
                                                        time_spent_in_queue, model_fetching_time, execution_time]
                 task_index += 1

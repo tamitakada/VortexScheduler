@@ -74,6 +74,7 @@ class TasksArrivalAtScheduler(Event):
         self.tasks = [task for task in self.tasks 
                       if not (self.simulation.task_drop_log["job_id"] == task.job_id).any()]
         if not self.tasks:
+            print("Dropped all tasks in arriving batch; skip arrival event")
             return []
 
         for task in self.tasks:
@@ -105,6 +106,10 @@ class BatchRejectionAtWorker(Event):
     def run(self, current_time):
         if self.simulation.simulation_name == "shepherd":
             self.simulation.scheduler.worker_rejected_batch(self.worker.worker_id, self.batch, self.current_worker_batch)
+        elif self.simulation.simulation_name == "qlm":
+            self.simulation.scheduler.worker_rejected_batch(self.worker, self.batch, self.current_worker_batch)
+            return [] # for QLM, tasks do NOT need to be re-queued
+        
         if self.batch.size() == 0:
             return [] # possible if all tasks were dropped
         return [EventOrders(current_time, TasksArrivalAtScheduler(self.simulation, self.batch.tasks))] # reschedule batch
@@ -313,8 +318,6 @@ class BatchEndEvent(Event):
         self.task_type = task_type # (workflow_id, task_id)
 
     def run(self, current_time):
-        if self.worker.did_abandon_batch(self.batch.id):
-            return []
         return self.worker.free_slot(current_time, self.batch, self.task_type)
 
     def should_abandon_event(self, current_time, kwargs: dict):
@@ -328,38 +331,37 @@ class BatchEndEvent(Event):
         return True
 
 
-# for PER_JOB scheduler
-# class JobAssignEvent(Event):
-#     """
-#     Used in PER_JOB scheduler.
-#     Event to signify that a JOB has been assigned to a worker for execution.
-#     JobArrivalAtScheduler delay generate one another in a chain reaction.
-#     """
+class AbortJobsOnWorkerEvent(Event):
+    """
+        Event signifying that worker should abort all currently executing jobs and 
+        send them back to the centralized scheduler for rescheduling.
+    """
 
-#     def __init__(self, worker, job):
-#         self.worker = worker
-#         self.job = job
+    def __init__(self, simulation, worker):
+        self.simulation = simulation
+        self.worker = worker
 
-#     def run(self, current_time):
-#         return self.worker.add_job(current_time, self.job)
+    def run(self, current_time):
+        events = []
+        curr_batch_ids = [s.reserved_batch.id for s in self.worker.GPU_state.state_at(current_time) if s.reserved_batch]
+        for batch_id in curr_batch_ids:
+            Worker._abandoned_batches.append(batch_id)
+            evicted_batch = self.worker.evict_batch(batch_id, current_time)
+            # NOTE: for QLM, incomplete batches are still queued on global queue
+            if self.simulation.centralized_scheduler and self.simulation.simulation_name != "qlm":
+                events.append(EventOrders(
+                    current_time + CPU_to_CPU_delay(evicted_batch.tasks[0].input_size * evicted_batch.size()), 
+                    TasksArrivalAtScheduler(self.simulation, evicted_batch.tasks)))
+            elif not self.simulation.centralized_scheduler:
+                # TODO: decentral + HERD case
+                raise NotImplementedError("Job abort for decentralized scheduler")
+        return events
 
-#     def to_string(self):
-#         return "[Job Assign] ---"
-
-
-# class JobEndEvent(Event):
-#     """ Event to signify that a JOB has been executed by the NODE.
-#     JobArrivalAtScheduler delay generate one another in a chain reaction."""
-
-#     def __init__(self, worker, job):
-#         self.worker = worker
-#         self.job = job
-
-#     def run(self, current_time):
-#         return self.worker.free_slot(current_time, self.job)
-
-#     def to_string(self):
-#         return "[Job End] ==="
+    def to_string(self):
+        return f"[Abort Jobs on Worker {self.worker.worker_id}]"
+    
+    def is_worker_event():
+        return True
 
 
 class AbortAllJobsEvent(Event):
@@ -374,8 +376,6 @@ class AbortAllJobsEvent(Event):
         self.run_herd_sched = run_herd_sched
 
     def run(self, current_time):
-        # NOTE: assumes abort is costless
-
         events = []
         for worker in self.simulation.workers:
             curr_batch_ids = [s.reserved_batch.id for s in worker.GPU_state.state_at(current_time) if s.reserved_batch]
@@ -454,6 +454,69 @@ class RerunHerdScheduler(Event):
     
     def to_string(self):
         return "[HERD Scheduler Rerun]"
+    
+    def is_worker_event():
+        return False
+    
+
+class ReorderQLMVirtualQueues(Event):
+    """
+        Event signifying that virtual queues should be reordered.
+        Only for QLM scheduler.
+    """
+
+    def __init__(self, simulation):
+        self.simulation = simulation
+
+    def run(self, current_time):
+        return self.simulation.scheduler.reorder_vqs(current_time)
+
+    def to_string(self):
+        return "[QLM Scheduler Reorder VQs]"
+    
+    def is_worker_event():
+        return False
+    
+
+class UpdateQLMVirtualQueueOrdering(Event):
+    """
+        Event signifying that a new VQ ordering has been produced and should
+        be applied.
+        Only for QLM scheduler.
+    """
+
+    def __init__(self, simulation, new_vq_map):
+        self.simulation = simulation
+        self.new_vq_map = new_vq_map
+
+    def run(self, current_time):
+        # update to reflect any changes from LP solver start to end
+        new_groups = {}
+        for vq in self.simulation.scheduler.vqs:
+            for group in vq.groups:
+                if all(group not in self.new_vq_map[v.vq_id] for v in self.simulation.scheduler.vqs):
+                    if vq.vq_id not in new_groups:
+                        new_groups[vq.vq_id] = []
+                    new_groups[vq.vq_id].append(group)
+
+        for vq in self.simulation.scheduler.vqs:
+            for group in list(vq.groups):
+                vq.groups.remove(group)
+        
+            for group in self.new_vq_map[vq.vq_id]:
+                if len(group.tasks) > 0 and all([not (self.simulation.task_drop_log["job_id"]==task.job.id).any() 
+                                                 for task in group.tasks]):
+                    vq.groups.append(group)
+            
+            # NOTE: any groups created after the initial reordering will be appended at the end
+            if vq.vq_id in new_groups:
+                for group in new_groups[vq.vq_id]:
+                    vq.groups.append(group)
+        
+        return self.simulation.scheduler.update_state_on_reorder(current_time)
+
+    def to_string(self):
+        return "[QLM Scheduler Update VQ Order]"
     
     def is_worker_event():
         return False

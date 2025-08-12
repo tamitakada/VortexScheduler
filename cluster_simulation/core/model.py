@@ -22,7 +22,7 @@ class Model:
 
     def __eq__(self, other):
         if isinstance(other, Model):
-            return self.model_id == other.model_id and self.job_type_id == other.job_type_id
+            return self.model_id == other.model_id
         return False
 
     def __ne__(self, other):

@@ -14,19 +14,21 @@ from schedulers.centralized.qlm.virtual_queue import VirtualQueue
 import gurobipy as gp
 from gurobipy import GRB
 from gurobipy import quicksum
-from gurobipy import LinExpr
 
 from bidict import bidict
 from collections import deque
 
 import numpy as np
 import copy
+import time
 
 
 class QLMScheduler(Scheduler):
 
     def __init__(self, simulation, herd_assignment=None):
         super().__init__(simulation, herd_assignment)
+
+        self.is_reordering = False
         
         self.vqs = [VirtualQueue() for w in simulation.workers]
         self.task_to_group = {}
@@ -36,72 +38,6 @@ class QLMScheduler(Scheduler):
 
         self.worker_states = { w: [] for w in simulation.workers }
 
-    def worker_rejected_batch(self, worker: Worker, batch: Batch, current_worker_batch: Batch):
-        if batch in self.worker_states[worker]:
-            self.worker_states[worker].remove(batch)
-        
-        if current_worker_batch and current_worker_batch not in self.worker_states[worker]:
-            self.worker_states[worker].append(current_worker_batch)
-
-    def _get_largest_head_batch(self, vq, current_time, close_group=False) -> list[Task]:
-        """
-            Returns the largest contiguous set of tasks requiring the same model
-            pulled from [vq]. Does not modify [vq].
-        """
-        if len(vq.groups) == 0:
-            return []
-        
-        head_batch_tasks = copy.copy(vq.groups[0].tasks)
-
-        assert(len(head_batch_tasks) <= head_batch_tasks[0].max_batch_size)
-        assert(t.log.task_arrival_at_scheduler_timestamp >= current_time for t in head_batch_tasks)
-        assert(len(set(t.job_id for t in head_batch_tasks)) == len(head_batch_tasks))
-
-        if close_group:
-            if vq.groups[0] in self.model_slo_group_bimap.inv:
-                self.model_slo_group_bimap.inv.pop(vq.groups[0])
-        
-        return head_batch_tasks
-    
-    def _is_batch_eq(self, b1: list[Task], b2: list[Task]) -> bool:
-        if len(b1) != len(b2):
-            return False
-        
-        b1 = sorted(b1, key=lambda t: t.job_id)
-        b2 = sorted(b2, key=lambda t: t.job_id)
-
-        for i in range(len(b1)):
-            if b1[i].task_id != b2[i].task_id or b1[i].job_id != b2[i].job_id:
-                return False
-        
-        return True
-    
-    def _drop_late_jobs(self, current_time):
-        """
-
-        """
-        for vq in self.vqs:
-            for group in list(vq.groups):
-                for task in list(group.tasks):
-                    deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
-                    if current_time >= deadline:
-                        group.tasks.remove(task)
-                        if not (self.simulation.task_drop_log["job_id"]==task.job.id).any():
-                            self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
-                                "client_id": task.job.client_id,
-                                "job_id": task.job_id,
-                                "workflow_id": task.task_type[0],
-                                "task_id": task.task_type[1],
-                                "drop_time": current_time,
-                                "arrival_time": task.log.task_arrival_at_scheduler_timestamp,
-                                "slo": task.job.slo,
-                                "deadline": deadline
-                            }
-                if len(group.tasks) == 0:
-                    vq.groups.remove(group)
-                    if group in self.model_slo_group_bimap.inv:
-                        self.model_slo_group_bimap.inv.pop(group)
-
     def schedule_job_on_arrival(self, job, current_time):
         return self.schedule_tasks_on_arrival([t for t in job.tasks if len(t.required_task_ids) == 0], 
                                               current_time)
@@ -109,7 +45,7 @@ class QLMScheduler(Scheduler):
     def schedule_tasks_on_arrival(self, tasks, current_time):
         if QLM_ENABLE_DROP:
             self._drop_late_jobs(current_time)
-
+        
         prev_qsize = sum(len(grp.tasks) for vq in self.vqs for grp in vq.groups)
         for task in tasks:
             # Add task to task group
@@ -192,10 +128,21 @@ class QLMScheduler(Scheduler):
             return worker.maybe_start_batch(new_batch, current_time)
         return []
     
-    def schedule_tasks_on_queue(self, current_time):
-        return super().schedule_tasks_on_queue(current_time)
+    # STATE MANAGEMENT ========================================================================================
 
-    def _check_violation(self, vqs, time):
+    def worker_rejected_batch(self, worker: Worker, batch: Batch, current_worker_batch: Batch):
+        """
+            Updates scheduler's view of workers upon receiving a batch rejection event.
+        """
+        if batch in self.worker_states[worker]:
+            self.worker_states[worker].remove(batch)
+        
+        if current_worker_batch and current_worker_batch not in self.worker_states[worker]:
+            self.worker_states[worker].append(current_worker_batch)
+    
+    # VQ REORDERING ========================================================================================
+
+    def _check_violation(self, vqs, current_time):
         """
         Checks for SLO violations in the virtual queues.
         :param vqs: The list of virtual queues.
@@ -212,7 +159,7 @@ class QLMScheduler(Scheduler):
                 if prev_model != None and prev_model != curr_model:
                     est_time += SameMachineCPUtoGPU_delay(curr_model.model_size)
 
-                # [!] NOTE: Estimation is worst case - no batching
+                # NOTE: Estimation is worst case - no batching
                 waiting_time = group.model.batch_exec_times[24][1] * len(group.tasks)
                 est_time += waiting_time
 
@@ -220,53 +167,27 @@ class QLMScheduler(Scheduler):
                     return True
         return False
     
-    def send_head_batch_to_worker(self, worker: Worker, time: float) -> list[EventOrders]:
-        events = []
-        vq_head_batch_tasks = self._get_largest_head_batch(self.vq_worker_bimap.inv[worker], time, close_group=True)
-        new_batch = Batch(vq_head_batch_tasks)
-        if len(self.worker_states[worker]) == 0:
-            self.worker_states[worker].append(new_batch)
-            events.append(EventOrders(
-                time + CPU_to_CPU_delay(sum(t.input_size for t in new_batch.tasks)),
-                BatchArrivalAtWorker(self.simulation, worker, new_batch)))
-        elif not ENABLE_MULTITHREADING:
-            old_batch = self.worker_states[worker][0]
-            self.worker_states[worker] = [new_batch]
-            events.append(EventOrders(
-                time + CPU_to_CPU_delay(sum(t.input_size for t in new_batch.tasks)),
-                BatchPreemptionAtWorker(self.simulation, worker, new_batch, old_batch.id)))
-        else:
-            raise NotImplementedError("Multiple abort")
-        return events
-
-    def reorder_vqs(self, time) -> list[EventOrders]:
+    def update_state_on_reorder(self, current_time):
         """
-        Reorders the virtual queues based on the scheduling policy.
-        :param vqs: The list of virtual queues.
-        :return: The reordered list of virtual queues.
-        """ 
-        prev_qsize = sum(len(grp.tasks) for vq in self.vqs for grp in vq.groups)
-
-        if QLM_REORDER_POLICY == "EDF":
-            self._reorder_edf(self.vqs)
-        elif QLM_REORDER_POLICY == "LP":
-            self._reorder_lp_solver(self.vqs)
-        else:
-            raise NotImplementedError("Reorder policy not recognized: Use EDF or LP")
-
-        reordered_qsize = sum(len(grp.tasks) for vq in self.vqs for grp in vq.groups)
-        assert(prev_qsize == reordered_qsize)
+            Update executing batches on all workers based on current ordering of [self.vqs].
+        """
+        self.is_reordering = False
 
         # update group -> vq map
         for vq in self.vqs:
             for group in vq.groups:
                 self.group_to_vq[group] = vq
 
+        # given new VQ order, update workers as necessary
         events = []
         for vq in self.vqs:
             worker = self.vq_worker_bimap[vq]
-            vq_head_batch_tasks = self._get_largest_head_batch(vq, time)
-            if not vq_head_batch_tasks:
+            vq_head_batch_tasks = self._get_largest_head_batch(vq, current_time)
+            if not vq_head_batch_tasks and not self.worker_states[worker]:
+                continue
+            elif not vq_head_batch_tasks:
+                # TODO: multithreading
+                events.append(EventOrders(current_time, AbortJobsOnWorkerEvent(self.simulation, worker)))
                 continue
             
             worker_same_model_batch = [b for b in self.worker_states[worker]
@@ -276,9 +197,26 @@ class QLMScheduler(Scheduler):
                 continue # no change in head batch
 
             # otherwise, head group changed and worker batch should be evicted
-            events += self.send_head_batch_to_worker(worker, time)
-
+            events += self.send_head_batch_to_worker(worker, current_time)
         return events
+
+    def reorder_vqs(self, current_time) -> list[EventOrders]:
+        """
+        Reorders the virtual queues based on the scheduling policy.
+        :param vqs: The list of virtual queues.
+        :return: The reordered list of virtual queues.
+        """ 
+        if self.is_reordering:
+            return []
+
+        self.is_reordering = True
+        if QLM_REORDER_POLICY == "EDF":
+            self._reorder_edf(self.vqs)
+            return self.update_state_on_reorder(current_time)
+        elif QLM_REORDER_POLICY == "LP":
+            return self._reorder_lp_solver(self.vqs, current_time)
+        else:
+            raise NotImplementedError("Reorder policy not recognized: Use EDF or LP")
 
     def _reorder_edf(self, vqs):
         """
@@ -290,159 +228,271 @@ class QLMScheduler(Scheduler):
             groups = list(vq.groups)
             groups.sort(key=lambda x: x.slo)
             vq.groups = deque(groups)
-
         return vqs
 
-    def _reorder_lp_solver(self, vqs):
-        # TODO: ADDITIONAL STATIC ALLOC CONSTRAINT / TOTAL MEMORY CONSTRAINT
-
+    def _reorder_lp_solver(self, vqs, current_time):
         """
         Reorders the virtual queues based on the Linear Programming (LP) solver.
         :param vqs: The list of virtual queues.
         :return: The reordered list of virtual queues.
         """
-        all_groups = [grp for vq in self.vqs for grp in vq.groups]
 
-        G = range(len(self.vqs))                            # set of virtual queues
-        I = range(sum(len(vq.groups) for vq in self.vqs))   # set of request groups
-        L = len(all_groups)                                 # max length of virtual queue
+        options = {
+            "WLSACCESSID": GUROBI_WLSACCESSID,
+            "WLSSECRET": GUROBI_WLSSECRET,
+            "LICENSEID": GUROBI_LICENSEID,
+        }
 
-        print(f"L: {L}")
+        groups = [grp for vq in self.vqs for grp in vq.groups]
+        group_model_ids = list(set([grp.model.model_id for grp in groups]))
+        models = [group_model_ids.index(grp.model.model_id) for grp in groups]
+        slos = [grp.slo for grp in groups]
 
-        models_i = [group.model.model_id for group in all_groups]  # model type for each request group i
-        slos_i = [group.slo for group in all_groups]    # SLO value for each request group i
-        completion_i = [len(group.tasks) * group.model.batch_exec_times[24][1] for group in all_groups]  # estimated completion time for each request group i
-        swap_time = SameMachineCPUtoGPU_delay(max(group.model.model_size for group in all_groups))        # constant swap time for model switching
+        N = len(groups)  # nunber of request groups
+        WORKERs = len(vqs)  # number of GPUs
+        SLOTs = len(groups)  # number of slots per GPU
+        MODELs = len(set(models))  # number of models being served (assume serially labeled from 0 to MODELs-1)
+        MODEL_SWAP_TIME = int(SameMachineCPUtoGPU_delay(max(group.model.model_size for group in groups)))
 
-        # Start model
-        m = gp.Model("QLM_GlobalScheduler")
-        m.setParam('OutputFlag', 0)
+        solver_start = time.perf_counter()
 
-        # Variables
-        x = m.addVars(G, I, L, vtype=GRB.BINARY, name="x")  # assignment of i to g at pos j
-        t = m.addVars(G, L, vtype=GRB.BINARY, name="t")     # model transition
-        wt = m.addVars(G, L, vtype=GRB.CONTINUOUS, name="wt")  # waiting time
-        p = m.addVars(G, L, vtype=GRB.CONTINUOUS, name="penalty")  # penalty
+        with gp.Env(params=options) as env, gp.Model(env=env) as model:
+            # Model initialization
+            model.setParam("OutputFlag", 0) # silence output
 
-        # Custom constraint for MIG and static allocation settings
-        if ENABLE_DYNAMIC_MODEL_LOADING:
-            for g in G:
-                worker_memory = self.vq_worker_bimap[self.vqs[g]].GPU_state._total_memory
-                for j in range(L):
-                    for i in I:
-                        if worker_memory < all_groups[i].model.model_size:
-                            m.addConstr(x[g, i, j] == 0)
-        else:
-            for g in G:
-                worker_models = self.vq_worker_bimap[self.vqs[g]].GPU_state.placed_models(0)
-                for i in I:
-                    if all_groups[i].model not in worker_models:
-                        for j in range(L):
-                            m.addConstr(x[g, i, j] == 0)
+            x = model.addVars(WORKERs, N, N, vtype=GRB.BINARY, name="x")
+            completion_slot = model.addVars(WORKERs, N, vtype=GRB.CONTINUOUS, name="ct")
+            model_slot = model.addVars(WORKERs, N, vtype=GRB.INTEGER, name="model")
+            transition_slot = model.addVars(WORKERs, N, vtype=GRB.BINARY, name="trans")
+            slo_slot = model.addVars(WORKERs, N, vtype=GRB.CONTINUOUS, name="slo")
+            penalty_slot = model.addVars(
+                WORKERs, N, vtype=GRB.CONTINUOUS, name="penalty", lb=-GRB.INFINITY
+            )
 
-        # Constraint (6): Each request group assigned to exactly one position
-        for i in I:
-            m.addConstr(quicksum(x[g, i, j] for g in G for j in range(L)) == 1)
+            # Custom constraint for MIG and static allocation settings
+            if ENABLE_DYNAMIC_MODEL_LOADING:
+                for g in range(WORKERs):
+                    worker_memory = self.vq_worker_bimap[vqs[g]].GPU_state._total_memory
+                    for slot in range(SLOTs):
+                        for i in range(N):
+                            if worker_memory < groups[i].model.model_size:
+                                model.addConstr(x[g, i, slot] == 0)
+            else:
+                for g in range(WORKERs):
+                    worker_models = self.vq_worker_bimap[vqs[g]].GPU_state.placed_models(0)
+                    for i in range(N):
+                        if groups[i].model not in worker_models:
+                            for slot in range(SLOTs):
+                                model.addConstr(x[g, i, slot] == 0)
 
-        # Constraint: Each position can hold at most one request group
-        for g in G:
-            for j in range(L):
-                m.addConstr(quicksum(x[g, i, j] for i in I) <= 1)
-
-        # Constraints (7) and (8): model and SLO at each position
-        m_gj = {}
-        slo_gj = {}
-        for g in G:
-            for j in range(L):
-                m_gj[g, j] = m.addVar(vtype=GRB.CONTINUOUS, name=f"model_{g}_{j}")
-                slo_gj[g, j] = m.addVar(vtype=GRB.CONTINUOUS, name=f"slo_{g}_{j}")
-                m.addConstr(m_gj[g, j] == quicksum(models_i[i] * x[g, i, j] for i in I))
-                m.addConstr(slo_gj[g, j] == quicksum(slos_i[i] * x[g, i, j] for i in I))
-
-        # Constraint (9): Model swap indicator
-        # Initializing model swap time for first GPU slot to 0
-        for g in G:
-            m.addConstr(t[g, 0] == 0)
-
-        # Calculating model swap times based on adjacent GPU slots
-        num_models = len(models_i)
-        for g in G:
-            for j in range(1, L):
-                m.addConstr(
-                    m_gj[g, j] - m_gj[g, j]
-                    <= 1 + num_models - num_models * t[g, j]
-                )
-                m.addConstr(
-                    m_gj[g, j] - m_gj[g, j - 1]
-                    >= num_models * t[g, j] - num_models - 1
-                )
-                m.addConstr(
-                    m_gj[g, j] - m_gj[g, j - 1]
-                    <= num_models * t[g, j] - 1
-                )
-                m.addConstr(
-                    m_gj[g, j] - m_gj[g, j - 1]
-                    >= 1 - num_models * t[g, j]
-                )
-
-        # Constraint (10): Waiting time
-        # Estimating cumulative completion time per GPU slot
-        for g in G:
-            for j1 in range(L):
-                m.addConstr(
-                    wt[g, j1]
-                    == quicksum(
-                        completion_i[i] * x[g, i, j2]
-                        for i in I for j2 in range(j1 if j1 == L-1 else (j1+1))
+            # [From QLM] Each group must be assigned exactly one slot on some worker
+            for i in range(N):
+                model.addConstr(
+                    quicksum(
+                        x[g, i, slot] for g in range(WORKERs) for slot in range(SLOTs)
                     )
-                )
-        
-        # Constraint (11): Penalty = wait + swap - SLO
-        # Estimating penalty for violating SLOs
-        for g in G:
-            for j in range(L):
-                m.addConstr(
-                    p[g, j]
-                    == wt[g, j]
-                    + swap_time * m_gj[g, j]
-                    - slo_gj[g, j]
+                    == 1
                 )
 
-        # Constraint (12): SLO must be met (penalty <= 0)
-        # NOTE: Allows tardy jobs
-        # for g in G:
-        #     for j in range(L):
-        #         m.addConstr(p[g, j] <= 0)
+            # [Mod. from QLM] Each slot on each worker can be assigned up to 1 group
+            for g in range(WORKERs):
+                for slot in range(SLOTs):
+                    # == 1 -> relaxed to <= 1
+                    model.addConstr(quicksum(x[g, i, slot] for i in range(N)) <= 1)
 
-        # Objective: Minimize total penalty
-        m.setObjective(quicksum(p[g, j] for g in G for j in range(L)), GRB.MINIMIZE)
+            # [From QLM] Calculating model type and SLO for all GPU slots
+            for g in range(WORKERs):
+                for slot in range(SLOTs):
+                    model.addConstr(
+                        model_slot[g, slot]
+                        == quicksum(models[i] * x[g, i, slot] for i in range(N))
+                    )
+                    model.addConstr(
+                        slo_slot[g, slot]
+                        == quicksum(slos[i] * x[g, i, slot] for i in range(N))
+                    )
 
-        # Solve
-        m.optimize()
+            # model_delta[g, slot] = abs(difference between adjacent slot model IDs)
+            diff = model.addVars(WORKERs, SLOTs, lb=-MODELs, ub=MODELs, vtype=GRB.INTEGER, name="diff")
+            model_delta = model.addVars(WORKERs, SLOTs, lb=0, ub=MODELs, vtype=GRB.INTEGER, name="model_delta")
+            for g in range(WORKERs):
+                for slot in range(1, SLOTs):
+                    model.addConstr(diff[g, slot] == model_slot[g, slot] - model_slot[g, slot - 1])
+                    model.addGenConstrAbs(model_delta[g, slot], diff[g, slot])
 
-        if m.Status == GRB.OPTIMAL:
-            print("Optimal solution found for LP!")
+            # Initializing model swap time for first GPU slot to 0
+            for g in range(WORKERs):
+                model.addConstr(transition_slot[g, 0] == 0)
+                model.addConstr(model_delta[g, 0] == 0)
 
-            for vq in vqs:
-                while len(vq.groups) > 0:
-                    vq.pop_group()
+            # [Mod. from QLM] Set transition slot based on model ID deltas
+            for g in range(WORKERs):
+                for slot in range(1, SLOTs):
+                    model.addConstr(model_delta[g, slot] >= transition_slot[g, slot])
+                    model.addConstr(model_delta[g, slot] <= MODELs * transition_slot[g, slot])
 
-            for g in G:
-                for i in I:
-                    for slot in range(L):
-                        var_name = f"x[{g},{i},{slot}]"
-                        var = m.getVarByName(var_name)
-                        if var and abs(var.X) > 0.5:  # Only display non-zero values
-                            vqs[g].groups.append(all_groups[i])
-            return vqs
+                    # Original QLM:
+                    # model.addConstr(
+                    #     model_slot[g, slot] - model_slot[g, slot - 1]
+                    #     <= 1 + MODELs - MODELs * transition_slot[g, slot]
+                    # )
+                    # model.addConstr(
+                    #     model_slot[g, slot] - model_slot[g, slot - 1]
+                    #     >= MODELs * transition_slot[g, slot] - MODELs - 1
+                    # )
+                    # model.addConstr(
+                    #     model_slot[g, slot] - model_slot[g, slot - 1]
+                    #     <= MODELs * transition_slot[g, slot] - 1
+                    # )
+                    # model.addConstr(
+                    #     model_slot[g, slot] - model_slot[g, slot - 1]
+                    #     >= 1 - MODELs * transition_slot[g, slot]
+                    # )
+
+            # Estimating cumulative completion time per GPU slot
+            worst_case_group_exec_time = [len(groups[i].tasks) * groups[i].model.batch_exec_times[24][1] for i in range(N)]
+            worst_case_vq_exec_time = sum(worst_case_group_exec_time)
+            for g in range(WORKERs):
+                for slot in range(SLOTs):
+                    model.addConstr(
+                        completion_slot[g, slot]
+                        >= quicksum(
+                            worst_case_group_exec_time[i] * x[g, i, j]
+                            for i in range(N)
+                            for j in range(slot + 1)
+                        )
+                    )
+
+                    # Prevent a VQ with no groups assigned from being prioritized over
+                    # multiple VQs spreading out requests
+                    model.addConstr(
+                        completion_slot[g, slot]
+                        >= worst_case_vq_exec_time * (1 - quicksum(x[g, i, j] for i in range(N) for j in range(slot + 1)))
+                    )
+
+            # [Mod. from QLM] Estimating penalty for violating SLOs
+            for g in range(WORKERs):
+                for slot in range(SLOTs):
+                    model.addConstr(
+                        penalty_slot[g, slot]
+                        == completion_slot[g, slot]
+                        + (MODEL_SWAP_TIME * transition_slot[g, slot] if ENABLE_DYNAMIC_MODEL_LOADING else 0)
+                        - slo_slot[g, slot]
+                    )
+
+            # [Mod. from QLM] Constraining no SLO violation -> Allow tardy
+            # for g in range(WORKERs):
+            #     for slot in range(SLOTs):
+            #         model.addConstr(penalty_slot[g, slot] <= 0)
+
+            # [From QLM] Minimize total penalty
+            model.setObjective(
+                quicksum(
+                    penalty_slot[g, slot]
+                    for g in range(WORKERs)
+                    for slot in range(SLOTs)
+                ),
+                GRB.MINIMIZE,
+            )
+
+            model.optimize()
+
+            solver_end = time.perf_counter()
+            solver_time = solver_end - solver_start
+
+            if model.Status == GRB.OPTIMAL:
+                new_vq_map = { vq.vq_id: [] for vq in vqs }
+                for g in range(WORKERs):
+                    for i in range(N):
+                        for slot in range(N):  # same dimension as when creating x
+                            var = x[g, i, slot]
+                            if var and var.X > 0.5:
+                                new_vq_map[vqs[g].vq_id].append(groups[i])
+                return [EventOrders(current_time + solver_time,
+                                    UpdateQLMVirtualQueueOrdering(self.simulation, new_vq_map))]
+            else:
+                print("Solver status code:", model.Status)
+                print("No optimal solution found for LP, reverting to EDF")
+                self._reorder_edf(self.vqs)
+                return self.update_state_on_reorder(current_time)
+
+    # BATCHING HELPERS ========================================================================================
+
+    def send_head_batch_to_worker(self, worker: Worker, current_time: float) -> list[EventOrders]:
+        """
+            Send the current head batch on the virtual queue for [worker] to [worker]
+            for execution, preempting any executing batches if necessary.
+        """
+        events = []
+        vq_head_batch_tasks = self._get_largest_head_batch(self.vq_worker_bimap.inv[worker], current_time, close_group=True)
+        new_batch = Batch(vq_head_batch_tasks)
+        if len(self.worker_states[worker]) == 0:
+            self.worker_states[worker].append(new_batch)
+            events.append(EventOrders(
+                current_time + CPU_to_CPU_delay(sum(t.input_size for t in new_batch.tasks)),
+                BatchArrivalAtWorker(self.simulation, worker, new_batch)))
+        elif not ENABLE_MULTITHREADING:
+            old_batch = self.worker_states[worker][0]
+            self.worker_states[worker] = [new_batch]
+            events.append(EventOrders(
+                current_time + CPU_to_CPU_delay(sum(t.input_size for t in new_batch.tasks)),
+                BatchPreemptionAtWorker(self.simulation, worker, new_batch, old_batch.id)))
         else:
-            print("Solver status code:", m.Status)
-            print("No optimal solution found for LP, reverting to EDF")
+            raise NotImplementedError("Multiple abort")
+        return events
 
-            # debugging
-            # m.computeIIS()
-            # m.write("model.ilp")
-            # for i, grp in enumerate(all_groups):
-            #     print(f"{i}: {grp.model.model_id}")
+    def _get_largest_head_batch(self, vq, current_time, close_group=False) -> list[Task]:
+        """
+            Returns the largest contiguous set of tasks requiring the same model
+            pulled from [vq]. Does not modify [vq].
+        """
+        if len(vq.groups) == 0:
+            return []
+        
+        head_batch_tasks = copy.copy(vq.groups[0].tasks)
 
-            self._reorder_edf(vqs)
+        assert(len(head_batch_tasks) <= head_batch_tasks[0].max_batch_size)
+        assert(t.log.task_arrival_at_scheduler_timestamp >= current_time for t in head_batch_tasks)
+        assert(len(set(t.job_id for t in head_batch_tasks)) == len(head_batch_tasks))
+
+        if close_group:
+            if vq.groups[0] in self.model_slo_group_bimap.inv:
+                self.model_slo_group_bimap.inv.pop(vq.groups[0])
+        
+        return head_batch_tasks
+    
+    def _is_batch_eq(self, b1: list[Task], b2: list[Task]) -> bool:
+        if len(b1) != len(b2):
+            return False
+        
+        b1 = sorted(b1, key=lambda t: t.job_id)
+        b2 = sorted(b2, key=lambda t: t.job_id)
+
+        for i in range(len(b1)):
+            if b1[i].task_id != b2[i].task_id or b1[i].job_id != b2[i].job_id:
+                return False
+        
+        return True
+    
+    def _drop_late_jobs(self, current_time):
+        for vq in self.vqs:
+            for group in list(vq.groups):
+                for task in list(group.tasks):
+                    deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
+                    if current_time >= deadline:
+                        group.tasks.remove(task)
+                        if not (self.simulation.task_drop_log["job_id"]==task.job.id).any():
+                            self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                                "client_id": task.job.client_id,
+                                "job_id": task.job_id,
+                                "workflow_id": task.task_type[0],
+                                "task_id": task.task_type[1],
+                                "drop_time": current_time,
+                                "arrival_time": task.log.task_arrival_at_scheduler_timestamp,
+                                "slo": task.job.slo,
+                                "deadline": deadline
+                            }
+                if len(group.tasks) == 0:
+                    vq.groups.remove(group)
+                    if group in self.model_slo_group_bimap.inv:
+                        self.model_slo_group_bimap.inv.pop(group)

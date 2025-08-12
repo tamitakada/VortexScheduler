@@ -18,17 +18,19 @@ DECENTRALHEFT = 1
 CENTRALHEFT = 2
 HASHTASK = 3
 SHEPHERD = 4
+QLM = 5
 
 SCHEDULER_NAMES = bidict({
     NO_SCHEDULER: "no_scheduler",
     DECENTRALHEFT: "decentralheft",
     CENTRALHEFT: "centralheft",
     HASHTASK: "hashtask",
-    SHEPHERD: "shepherd"
+    SHEPHERD: "shepherd",
+    QLM: "qlm"
 })
 
 def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str):
-    assert(scheduler_type in [NO_SCHEDULER, DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD])
+    assert(scheduler_type in [NO_SCHEDULER, DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD, QLM])
     assert(scheduler_type != SHEPHERD or not ENABLE_MULTITHREADING) # concurrency not implemented for Shepherd
     assert(ALLOCATION_STRATEGY != "HERD" or ENABLE_DYNAMIC_MODEL_LOADING) # if HERD, dynamic loading must be enabled
 
@@ -54,6 +56,10 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
                                  produce_breakdown=True)
     elif scheduler_type == SHEPHERD:
         sim = Simulation_central(simulation_name="shepherd", job_split="PER_TASK",
+                                 num_workers=TOTAL_NUM_OF_NODES, job_types_list=job_types,
+                                 produce_breakdown=True)
+    elif scheduler_type == QLM:
+        sim = Simulation_central(simulation_name="qlm", job_split="PER_TASK",
                                  num_workers=TOTAL_NUM_OF_NODES, job_types_list=job_types,
                                  produce_breakdown=True)
 
@@ -99,7 +105,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask"])
+    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask", "qlm"])
     parser.add_argument("-o", "--out", type=str, default="results", help="Path to output directory")
     
     args = parser.parse_args()
