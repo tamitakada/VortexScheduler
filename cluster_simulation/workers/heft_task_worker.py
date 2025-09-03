@@ -148,53 +148,147 @@ class HeftTaskWorker(TaskWorker):
         
         return task_arrival_events
     
-    def check_task_queue(self, task_type, current_time):
-        task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
+    def get_largest_valid_batch(self, task_queue, max_bsize, current_time):
         tasks = []
-        for task in task_queue:
-            if current_time >= task.log.task_placed_on_worker_queue_timestamp:
-                # skip dropped tasks
-                if (self.simulation.task_drop_log["job_id"]==task.job_id).any():
-                    continue
+        bsizes = [[0 for j in range(max_bsize)] for i in range(len(task_queue))]
+        for i in range(len(task_queue)-1, -1, -1):
+            for j in range(max_bsize-1, 0, -1):
+                task = task_queue[i]
 
                 # get correct task deadline
                 if self.simulation.centralized_scheduler:
                     if SLO_GRANULARITY == "TASK":
-                        task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo
+                        task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + SLO_SLACK)
                         task_arrival = task.log.task_arrival_at_scheduler_timestamp 
                     else:
-                        task_deadline = task.log.job_creation_timestamp + task.job.slo
+                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
                         task_arrival = task.log.job_creation_timestamp
                 else:
                     if SLO_GRANULARITY == "TASK":
-                        task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo
+                        task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
                         task_arrival = task.log.task_placed_on_worker_queue_timestamp
                     else:
-                        task_deadline = task.log.job_creation_timestamp + task.job.slo
+                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
                         task_arrival = task.log.job_creation_timestamp
 
+                if (current_time + task.model.batch_exec_times[24][j]) > task_deadline:
+                    # on SLO violation, task [i] cannot be incl. in batch of size [j]
+                    bsizes[i][j] = 0
+                elif i == (len(task_queue)-1): # if on last task and no SLO violation, always 1
+                    bsizes[i][j] = 1
+                else:
+                    bsizes[i][j] = max(bsizes[i+1][j-1] + 1, # either task [i] in batch of size [j]
+                                        bsizes[i+1][j])       # or not
+        
+        max_i, max_j, max_formable_bsize = 0, 0, 0
+        for i in range(len(bsizes)):
+            for j in range(len(bsizes[i])):
+                if bsizes[i][j] > max_formable_bsize:
+                    max_formable_bsize = bsizes[i][j]
+                    max_i = i
+                    max_j = j
+        
+        counter = max_i
+        while counter < (max_i + max_j):
+            tasks.append(task_queue[counter])
+            counter += 1
+        return tasks
+    
+    def check_task_queue(self, task_type, current_time):
+        task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
+        for task in task_queue:
+            # skip dropped tasks
+            if (self.simulation.task_drop_log["job_id"]==task.job_id).any():
+                continue
 
-                # drop tasks whose SLO can't be met
-                if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline:
-                    for job_task in task.job.tasks:
-                        self.rm_task_in_queue_history(job_task, current_time)
-                    self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
-                        "client_id": task.job.client_id,
-                        "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
-                        "drop_time": current_time, 
-                        "arrival_time": task_arrival,
-                        "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
-                        "deadline": task_deadline
-                    }
-                    continue
-                
-                tasks.append(task)
+            # get correct task deadline
+            if self.simulation.centralized_scheduler:
+                if SLO_GRANULARITY == "TASK":
+                    task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + SLO_SLACK)
+                    task_arrival = task.log.task_arrival_at_scheduler_timestamp 
+                else:
+                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                    task_arrival = task.log.job_creation_timestamp
+            else:
+                if SLO_GRANULARITY == "TASK":
+                    task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
+                    task_arrival = task.log.task_placed_on_worker_queue_timestamp
+                else:
+                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                    task_arrival = task.log.job_creation_timestamp
 
-        if len(tasks) == 0:
-            return []
+            # drop tasks whose SLO can't be met
+            if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline:
+                for job_task in task.job.tasks:
+                    self.rm_task_in_queue_history(job_task, current_time)
+                self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                    "client_id": task.job.client_id,
+                    "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
+                    "drop_time": current_time, 
+                    "arrival_time": task_arrival,
+                    "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
+                    "deadline": task_deadline
+                }
+                continue
+        
+        # get queue after drops
+        task_queue = [task for task in self.get_queue_history(current_time, task_type, info_staleness=0)
+                      if current_time >= task.log.task_placed_on_worker_queue_timestamp and \
+                        (self.simulation.task_drop_log["job_id"]!=task.job_id).all()]
+        if len(task_queue) > 0:
+            max_bsize = task_queue[0].max_batch_size
+            tasks = self.get_largest_valid_batch(task_queue, max_bsize, current_time)
+            return self.maybe_start_batch(Batch(tasks), current_time) if len(tasks) > 0 else []
         else:
-            batch = Batch(tasks[:tasks[0].max_batch_size])
-            return self.maybe_start_batch(batch, current_time)
+            return []
+    
+    # def check_task_queue(self, task_type, current_time):
+    #     task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
+    #     tasks = []
+    #     for task in task_queue:
+    #         if current_time >= task.log.task_placed_on_worker_queue_timestamp:
+    #             # skip dropped tasks
+    #             if (self.simulation.task_drop_log["job_id"]==task.job_id).any():
+    #                 continue
+
+    #             # get correct task deadline
+    #             if self.simulation.centralized_scheduler:
+    #                 if SLO_GRANULARITY == "TASK":
+    #                     task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo
+    #                     task_arrival = task.log.task_arrival_at_scheduler_timestamp 
+    #                 else:
+    #                     task_deadline = task.log.job_creation_timestamp + task.job.slo
+    #                     task_arrival = task.log.job_creation_timestamp
+    #             else:
+    #                 if SLO_GRANULARITY == "TASK":
+    #                     task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo
+    #                     task_arrival = task.log.task_placed_on_worker_queue_timestamp
+    #                 else:
+    #                     task_deadline = task.log.job_creation_timestamp + task.job.slo
+    #                     task_arrival = task.log.job_creation_timestamp
+
+
+    #             # drop tasks whose SLO can't be met
+    #             if (current_time + task.model.batch_exec_times[24][0]) >= task_deadline:
+    #                 for job_task in task.job.tasks:
+    #                     self.rm_task_in_queue_history(job_task, current_time)
+    #                 self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+    #                     "client_id": task.job.client_id,
+    #                     "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
+    #                     "drop_time": current_time, 
+    #                     "arrival_time": task_arrival,
+    #                     "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
+    #                     "deadline": task_deadline
+    #                 }
+    #                 continue
+                
+    #             tasks.append(task)
+
+    #     if len(tasks) == 0:
+    #         return []
+    #     else:
+    #         batch = Batch(tasks[:tasks[0].max_batch_size])
+    #         return self.maybe_start_batch(batch, current_time)
 
     #  ---------------------------  Subsequent TASK Transfer   --------------------
 
