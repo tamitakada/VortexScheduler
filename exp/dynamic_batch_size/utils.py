@@ -1,21 +1,45 @@
 import bisect
 
+
+
+
 class SortedQueue:
     """
     A queue that maintains requests in ascending order by arrival_time.
     """
-    def __init__(self):
+    def __init__(self, sort_by="deadline"):
         self.requests = []
-    
+        self.sort_by = sort_by
+
     def append(self, request):
         """
-        Insert request at the correct position to maintain ascending order by arrival_time.
+        Insert request at the correct position to maintain ascending order by deadline.
         """
         # Find the insertion point to maintain sorted order
         # Create a list of arrival times for comparison
-        arrival_times = [req.arrival_time for req in self.requests]
-        insert_pos = bisect.bisect_right(arrival_times, request.arrival_time)
+        if self.sort_by == "deadline":
+            deadlines = [req.deadline for req in self.requests]
+            insert_pos = bisect.bisect_right(deadlines, request.deadline)
+        elif self.sort_by == "arrival_time":
+            arrival_times = [req.arrival_time for req in self.requests]
+            insert_pos = bisect.bisect_right(arrival_times, request.arrival_time)
+        else:
+            raise ValueError(f"Invalid sort_by: {self.sort_by}")
         self.requests.insert(insert_pos, request)
+    
+    # def get_request_by_earliest_arrival_time(self):
+    #     """
+    #     Get the request with the earliest arrival time.
+    #     """
+    #     if self.requests:
+    #         earliest_arrival_time = float('inf')
+    #         earliest_request = None
+    #         for req in self.requests:
+    #             if req.arrival_time < earliest_arrival_time:
+    #                 earliest_arrival_time = req.arrival_time
+    #                 earliest_request = req
+    #         return earliest_request
+    #     return None
     
     def pop(self):
         """
@@ -23,6 +47,14 @@ class SortedQueue:
         """
         if self.requests:
             return self.requests.pop(0)
+        raise IndexError("Queue is empty")
+
+    def pop_right(self):
+        """
+        Remove and return the request with the latest deadline.
+        """
+        if self.requests:
+            return self.requests.pop()
         raise IndexError("Queue is empty")
     
     def clear(self):
@@ -66,3 +98,6 @@ class SortedQueue:
         """
         for item in items:
             self.append(item)
+
+    def __repr__(self):
+        return f"SortedQueue(requests={self.requests})"
