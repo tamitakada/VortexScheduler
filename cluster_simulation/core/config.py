@@ -12,16 +12,20 @@ VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
 CLIENT_CONFIGS = [
     {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [95, 125],
-         "SEND_RATE_CHANGE_INTERVALS": [1500], 
-         "SLO": 100}}, # in ms
-    # {0: {"NUM_JOBS": 1000,
-    #      "SEND_RATES": [55, 95],
-    #      "SEND_RATE_CHANGE_INTERVALS": [500], # in queries since last change
-    #      "SLO": 30000}}
+         "SEND_RATES": [35],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": 188}}, # in ms
+    {0: {"NUM_JOBS": 3000,
+         "SEND_RATES": [35],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": 250}}, # in ms
+    {0: {"NUM_JOBS": 3000,
+         "SEND_RATES": [35],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": 313}}, # in ms
 ]
 
-WORKLOAD_DISTRIBUTION = "CONSTANT"  # CONSTANT | POISSON | GAMMA
+WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
 GAMMA_CV = 10  # Coefficient of variation for gamma distribution
 
 
@@ -37,6 +41,11 @@ RESCHEDULE_THREASHOLD = 1.5
 FLEX_LAMBDA = 3.03
 HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
+SHEPHERD_BATCHING_POLICY = "OPTIMAL"
+
+"""  -------        Boost Parameters  --------- """
+
+BOOST_PARAMETER = 0.00104567474
 
 
 """  -------        General Scheduling Parameters  --------- """
@@ -45,8 +54,11 @@ SLO_SLACK = 0.1
 SLO_GRANULARITY = "JOB" # TASK | JOB
 
 ENABLE_MULTITHREADING = False # allow multiple models on same partition to run at once
-ENABLE_MODEL_PREFETCH = True
-ENABLE_DYNAMIC_MODEL_LOADING = True
+ENABLE_MODEL_PREFETCH = False
+ENABLE_DYNAMIC_MODEL_LOADING = False
+
+# use Boost for global queue management (only for centralized schedulers)
+USE_BOOST = False
 
 # HERD | VORTEX | CUSTOM
 # NOTE: HERD requires ENABLE_DYNAMIC_MODEL_LOADING
