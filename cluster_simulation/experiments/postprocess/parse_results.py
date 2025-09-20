@@ -2,9 +2,13 @@ import sys
 import os
 import pandas as pd
 
+import seaborn as sns
+
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.lines as mlines
+
+from matplotlib.ticker import MultipleLocator
 
 import numpy as np
 import math
@@ -27,27 +31,30 @@ def plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plo
         client_df = job_df[job_df["client_id"]==client_id]
         drop_client_df = drop_df[drop_df["client_id"]==client_id]
         for jt in set(client_df["workflow_type"]):
-            job_create_times = client_df[client_df["workflow_type"] == jt]["job_create_time"] / 1000
+            job_create_times = client_df[client_df["workflow_type"] == jt]["job_create_time"]
             job_response_times = client_df[client_df["workflow_type"] == jt]["response_time"]
 
             slo_multiplier = float([k for k in all_stats[client_id][f"{jt}"].keys() if "jobs_within" in k][0].split("_")[2].split("slo")[0])
             slo = all_stats[client_id][f"{jt}"]["slo"]
 
             axes[i].scatter(
-                job_create_times,
+                job_create_times / 1000,
                 job_response_times,
                 label=f"Workflow ID {jt}: Complete",
                 s=4,
                 color="#4ee8dd"
             )
 
-            axes[i].scatter(
-                drop_client_df["arrival_time"] / 1000,
-                drop_client_df["drop_time"] - drop_client_df["arrival_time"],
-                label=f"Workflow ID {jt}: Dropped",
-                s=4,
-                color="#9145d3"
-            )
+            drop_colors = ["#7d29eb", "#e235ee", "#e9639b", "#ff0000", "#e6752a"]
+            for j, task_id in enumerate(sorted(set(drop_client_df["task_id"]))):
+                drop_task_df = drop_client_df[drop_client_df["task_id"]==task_id]
+                axes[i].scatter(
+                    drop_task_df["arrival_time"] / 1000,
+                    drop_task_df["drop_time"] - drop_task_df["create_time"],
+                    label=f"Workflow ID {jt}: Dropped @ Task {task_id}",
+                    s=4,
+                    color=drop_colors[j]
+                )
             
             axes[i].axhline(y=slo, color='red', linestyle='--', linewidth=1, label="SLO")
             axes[i].axhline(y=(slo * slo_multiplier), color='orange', linestyle='--', linewidth=1, label="Late deadline")
@@ -67,6 +74,42 @@ def plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plo
     plt.tight_layout(rect=[0, 0, 1, 0.9])
     fig.suptitle(f"{plot_title_prefix}\nJob Response Time vs. Arrival Time by Client")
     plt.savefig(os.path.join(out_path, "response_vs_arrival.pdf"))
+    plt.close()
+
+
+def plot_drop_times_cdf(all_stats, drop_df, out_path, plot_title_prefix):
+    client_ids = sorted(set(drop_df["client_id"]))
+    nrows = math.ceil(len(client_ids) / 2)
+    ncols = 1 if len(client_ids) == 1 else 2
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4 * nrows))
+    if ncols > 1:
+        axes = axes.flatten()
+    else:
+        axes = [axes]
+
+    for i, client_id in enumerate(client_ids):
+        client_data = [config["0"] for config in all_stats if config["0"]["client_id"] == client_id][0]
+
+        drop_client_df = drop_df[drop_df["client_id"]==client_id]
+        drop_task_ids = drop_client_df["task_id"]
+
+        sns.kdeplot(drop_task_ids, cumulative=True, ax=axes[i])
+        
+        axes[i].xaxis.set_major_locator(MultipleLocator(1))
+        axes[i].set_xlim(0, max(drop_task_ids))
+        axes[i].set_xlabel('Task ID')
+        axes[i].set_ylabel('CDF')
+        axes[i].set_title(f'Client {client_id} ({client_data["slo"]}ms SLO)')
+        axes[i].grid(True)
+
+    for i in range(nrows * ncols):
+        if i >= len(client_ids):
+            axes[i].set_visible(False)
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.9])
+    fig.suptitle(f"{plot_title_prefix} Drop Times by Task ID CDF")
+    plt.savefig(os.path.join(out_path, "drop_times_by_task_id.pdf"))
     plt.close()
 
 
@@ -357,6 +400,7 @@ if __name__ == "__main__":
     # plot_batch_size_bar_chart(batch_df, out_path, plot_title_prefix)
     # plot_batch_size_vs_batch_start(batch_df, out_path, plot_title_prefix)
     plot_response_time_vs_arrival_time(all_stats, job_df, drop_df, out_path, plot_title_prefix)
+    plot_drop_times_cdf(all_stats, drop_df, out_path, plot_title_prefix)
     
     stats_by_task_type(task_df, batch_df, job_df, out_path)
     
