@@ -103,7 +103,6 @@ class ShepherdScheduler(Scheduler):
     # FLEX ALGO ----------------------------------------------------------------------------
 
     def _flex_schedule_tasks_on_arrival(self, group, current_time):
-        self._drop_bad_tasks(current_time)
         events = []
         group_workers = self.herd_assignment.worker_groups[group].copy()
         ordered_group_workers = group_workers[self.next_worker_idxs[group]:] + group_workers[:self.next_worker_idxs[group]]
@@ -116,6 +115,7 @@ class ShepherdScheduler(Scheduler):
             if curr_batch_size == 0 and largest_batch_size > 0:
                 batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
                 assert(batch.size() == largest_batch_size)
+                self._drop_tasks(current_time, batch)
                 self.assign_batch_to_worker(worker.worker_id, batch)
                 events.append(EventOrders(
                     current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
@@ -123,21 +123,17 @@ class ShepherdScheduler(Scheduler):
             elif largest_batch_size > 0 and largest_batch_size >= FLEX_LAMBDA * curr_batch_size:
                 batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
                 assert(batch.size() == largest_batch_size)
+                self._drop_tasks(current_time, batch)
                 old_batch_id = self.worker_states[worker.worker_id].id
                 self.preempt_batch_on_worker(worker.worker_id, batch)
                 events.append(EventOrders(
                     current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
-                    BatchPreemptionAtWorker(self.simulation, worker, batch, old_batch_id)))
+                    BatchPreemptionScheduledAtWorker(self.simulation, worker, batch, old_batch_id)))
         # next time start from next worker in group
         self.next_worker_idxs[group] = (self.next_worker_idxs[group] + 1) % len(group_workers)
         return events
     
-    def _drop_bad_tasks(self, time: float):
-        """
-            For each model queue in [self.model_queues], for each task in queue, if 1) [time] >= task arrival 
-            at scheduler and 2) [time] + exec time of the smallest batch for this model > task deadline + 
-            grace period, then drop [task.job].
-        """
+    def _drop_tasks(self, time: float, curr_batch: Batch):
         for model_queue in self.model_queues.values():
             skipped_tasks = []
             while model_queue.qsize() > 0:
@@ -145,14 +141,21 @@ class ShepherdScheduler(Scheduler):
                 if time < ot.task.log.task_arrival_at_scheduler_timestamp:
                     skipped_tasks.append(ot)
                     continue
+
                 # drop tasks whose SLOs can't be satisfied within a grace period
-                if (time + ot.task.job.get_min_remaining_processing_time()) > ot.deadline:
+                if any(t.job_id == ot.task.job_id and t.task_id == ot.task.task_id for t in curr_batch.tasks):
+                    # batched tasks should have been popped
+                    assert(False)
+
+                curr_batch_exec_time = curr_batch.model.batch_exec_times[24][len(curr_batch.tasks)]
+                if (time + curr_batch_exec_time + ot.task.job.get_min_remaining_processing_time()) > ot.deadline:
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
                         "client_id": ot.task.job.client_id,
                         "job_id": ot.task.job_id,
                         "workflow_id": ot.task.task_type[0],
                         "task_id": ot.task.task_type[1],
                         "drop_time": time,
+                        "create_time": ot.task.log.job_creation_timestamp,
                         "arrival_time": ot.task_arrival_time,
                         "slo": ot.task.slo,
                         "deadline": ot.deadline
@@ -170,11 +173,13 @@ class ShepherdScheduler(Scheduler):
         tasks = []
         max_bsize = model_queue.queue[0].task.max_batch_size
         if SHEPHERD_BATCHING_POLICY == "OPTIMAL":
+            sorted_queue = sorted(model_queue.queue, key=lambda ot: ot.deadline - ot.task.job.get_min_remaining_processing_time())
             bsizes = [[0 for j in range(max_bsize)] for i in range(model_queue.qsize())]
             for i in range(model_queue.qsize()-1, -1, -1):
                 for j in range(max_bsize-1, 0, -1):
-                    ot = model_queue.queue[i]
-                    if (time + ot.task.model.batch_exec_times[24][j]) > ot.deadline:
+                    ot = sorted_queue[i]
+                    min_rem_ppl_time = ot.task.job.get_min_remaining_processing_time(init_proc_times={ot.task.task_id: ot.task.model.batch_exec_times[24][j]})
+                    if time + min_rem_ppl_time > ot.deadline:
                         # on SLO violation, task [i] cannot be incl. in batch of size [j]
                         bsizes[i][j] = 0
                     elif i == (model_queue.qsize()-1): # if on last task and no SLO violation, always 1
@@ -193,7 +198,7 @@ class ShepherdScheduler(Scheduler):
             
             counter = max_i
             while counter < (max_i + max_j):
-                tasks.append(model_queue.queue[counter])
+                tasks.append(sorted_queue[counter])
                 counter += 1
             
             if pop:
@@ -264,8 +269,6 @@ class ShepherdScheduler(Scheduler):
         return (largest_batch_model_id, largest_batch_size)
 
     def flex_schedule_on_batch_completion(self, worker: Worker, completed_batch: Batch, current_time: float):
-        self._drop_bad_tasks(current_time)
-        
         # if alr. assigned to a new batch do nothing
         if self.worker_states[worker.worker_id].id != completed_batch.id:
             return []
@@ -279,6 +282,7 @@ class ShepherdScheduler(Scheduler):
 
         if largest_batch_size > 0:
             batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+            self._drop_tasks(current_time, batch)
             self.assign_batch_to_worker(worker.worker_id, batch)
             return [EventOrders(
                 current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 

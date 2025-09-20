@@ -48,6 +48,9 @@ class Simulation(object):
         self.metadata_service = MetadataService()
         self.external_clients = []
 
+        # self.curr_num_nodes = MIN_NUM_NODES
+
+        # self.curr_jobs_in_processing = 0
         self.remaining_jobs = sum(cc[jt]["NUM_JOBS"] for cc in CLIENT_CONFIGS for jt in cc.keys())
         self.event_queue = PriorityQueue()
 
@@ -59,7 +62,7 @@ class Simulation(object):
         self.event_log = pd.DataFrame(columns=["time", "worker_id", "event"])
         self.batch_exec_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "workflow_id", 
                                                     "task_id", "batch_size", "job_ids"])
-        self.task_drop_log = pd.DataFrame(columns=["client_id", "job_id", "workflow_id", "task_id", "drop_time", 
+        self.task_drop_log = pd.DataFrame(columns=["client_id", "job_id", "workflow_id", "task_id", "drop_time", "create_time",
                                                    "arrival_time", "slo", "deadline"])
         self.allocation_logs = []
 

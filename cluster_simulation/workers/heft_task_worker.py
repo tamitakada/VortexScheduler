@@ -232,6 +232,7 @@ class HeftTaskWorker(TaskWorker):
                     "client_id": task.job.client_id,
                     "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
                     "drop_time": current_time, 
+                    "create_time": task.log.job_creation_timestamp,
                     "arrival_time": task_arrival,
                     "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
                     "deadline": task_deadline
