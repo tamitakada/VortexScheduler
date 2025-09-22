@@ -4,6 +4,8 @@ import numpy as np
 """ --------      Worker Machine Parameters      -------- """
 
 GPU_MEMORY_SIZE = 24000000  # in KB, 24GB for NVIDIA A30
+MAX_NUM_NODES = 20
+MIN_NUM_NODES = 4
 TOTAL_NUM_OF_NODES = 4
 VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
@@ -38,6 +40,13 @@ HERD_PERIODICITY = 0
 
 # BEST_EXEC_TIME_ONLY | FIRST_TASK_DEADLINE | OPTIMAL 
 SHEPHERD_BATCHING_POLICY = "BEST_EXEC_TIME_ONLY"
+
+
+""" -------         Boost parameters      -------- """
+
+USE_BOOST = False
+
+BOOST_PARAMETER = 0.00104567474
 
 
 """  -------        General Scheduling Parameters  --------- """
