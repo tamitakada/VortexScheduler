@@ -148,7 +148,7 @@ class BatchArrivalAtWorker(Event):
         return True
 
 
-class BatchPreemptionAtWorker(Event):
+class BatchPreemptionScheduledAtWorker(Event):
     """
     Event signifying that a batch should be preempted at a worker.
     """
@@ -164,11 +164,24 @@ class BatchPreemptionAtWorker(Event):
                             if not (self.simulation.task_drop_log["job_id"] == task.job_id).any()]
 
         # check if batch to be preempted still exists/is actively executing
-        if len(self.batch.tasks) > 0 and any(s.reserved_batch and s.reserved_batch.id == self.old_batch_id 
-               for s in self.worker.GPU_state.state_at(current_time)):
+        old_batch = [s.reserved_batch for s in self.worker.GPU_state.state_at(current_time)
+                     if s.reserved_batch and s.reserved_batch.id == self.old_batch_id]
+        if len(self.batch.tasks) > 0 and old_batch:
+            old_batch = old_batch[0]
+
             for task in self.batch.tasks:
                 task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time)
+
+            exec_progress = current_time - old_batch.tasks[0].log.task_execution_start_timestamp
+            prev_checkpoint = 0
+            for checkpoint in old_batch.model.checkpoints[self.worker.total_memory]:
+                if checkpoint > exec_progress:
+                    break
+                prev_checkpoint = checkpoint
+            
+            for task in self.batch.tasks:
+                task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time, prev_checkpoint)
         else:
             # NOTE: marks as abandoned anyway in case prior assigned batch has not yet arrived
             Worker._abandoned_batches.append(self.old_batch_id)
@@ -180,7 +193,7 @@ class BatchPreemptionAtWorker(Event):
                                        current_worker_batch=(current_batches[0] if current_batches else None)))]
     
     def to_string(self):
-        return f"[Batch Preemption at Worker {self.worker.worker_id} (Batch {self.old_batch_id} preempted)]"
+        return f"[Batch Preemption Scheduled at Worker {self.worker.worker_id} (Batch {self.old_batch_id} to be preempted)]"
     
     def is_worker_event():
         return True
