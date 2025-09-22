@@ -181,7 +181,7 @@ class BatchPreemptionScheduledAtWorker(Event):
             
             for task in self.batch.tasks:
                 task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time, 0)
+            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time)
         else:
             # NOTE: marks as abandoned anyway in case prior assigned batch has not yet arrived
             Worker._abandoned_batches.append(self.old_batch_id)
