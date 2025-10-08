@@ -1,7 +1,6 @@
 from core.job import Job
 from core.task import Task
-from core.events import *
-
+from core.events.base import *
 
 class Scheduler:
     """
