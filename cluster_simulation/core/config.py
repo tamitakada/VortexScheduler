@@ -10,19 +10,11 @@ VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
 """  --------       Workload Parameters    --------  """
 
-CLIENT_CONFIGS = [
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
+CLIENT_CONFIGS = [ # in ms
+    {0: {"NUM_JOBS": 10000,
+         "SEND_RATES": [95],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 188}}, # in ms
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 250}}, # in ms
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 313}}, # in ms
+         "SLO": 111}}
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -43,6 +35,10 @@ HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 SHEPHERD_BATCHING_POLICY = "OPTIMAL"
 
+# CLUSTER_ADMISSION_LIMIT | TASK_ADMISSION_LIMIT | OPTIMAL | LATEST_POSSIBLE | NONE
+DROP_POLICY = "LATEST_POSSIBLE"
+
+
 """  -------        Boost Parameters  --------- """
 
 BOOST_PARAMETER = 0.00104567474
@@ -50,7 +46,7 @@ BOOST_PARAMETER = 0.00104567474
 
 """  -------        General Scheduling Parameters  --------- """
 
-SLO_SLACK = 0.1
+SLO_SLACK = 0
 SLO_GRANULARITY = "JOB" # TASK | JOB
 
 ENABLE_MULTITHREADING = False # allow multiple models on same partition to run at once
