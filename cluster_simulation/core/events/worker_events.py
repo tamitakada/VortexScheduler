@@ -50,7 +50,7 @@ class TaskArrival(Event):
     def run(self, current_time):
         # log tracking for this task
         self.task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-        return self.worker.add_task(current_time, self.task)
+        return self.worker.add_tasks(current_time, [self.task])
 
     def to_string(self):
         return "[Task Arrival (Job {} - Task {}) at {}] ---".format(self.job_id, self.task.task_id, self.worker)
