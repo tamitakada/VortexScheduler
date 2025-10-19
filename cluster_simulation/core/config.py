@@ -10,19 +10,11 @@ VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
 """  --------       Workload Parameters    --------  """
 
-CLIENT_CONFIGS = [
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
+CLIENT_CONFIGS = [ # in ms
+    {1: {"NUM_JOBS": 3000,
+         "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 188}}, # in ms
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 250}}, # in ms
-    {0: {"NUM_JOBS": 3000,
-         "SEND_RATES": [35],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 313}}, # in ms
+         "SLO": 300}}
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
