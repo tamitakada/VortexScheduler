@@ -1,8 +1,11 @@
 from workers.worker import *
 
 from core.network import *
-from core.events import *
 from core.batch import Batch
+
+from core.events.base import *
+from core.events.centralized_scheduler_events import *
+from core.events.worker_events import *
 
 
 class TaskWorker(Worker):
@@ -62,7 +65,7 @@ class TaskWorker(Worker):
         
         return batch_end_events
 
-    def batch_execute(self, batch: Batch, current_time: float):
+    def batch_execute(self, batch: Batch, current_time: float, resume_from=-1):
         """
             Fetches a new copy or reserves an idle copy of any required GPU models
             and executes the batch [tasks]. Returns a list containing the 
@@ -75,6 +78,8 @@ class TaskWorker(Worker):
 
         batch_exec_time = batch.tasks[0].task_exec_duration if batch.model is None else \
             batch.tasks[0].model.get_exec_time(batch.size(), self.total_memory)
+        # if resume_from > 0:
+        #     batch_exec_time -= resume_from
         
         model_fetch_time = 0
         if batch.model != None:

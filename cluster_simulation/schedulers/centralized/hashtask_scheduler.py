@@ -1,5 +1,7 @@
 from core.config import *
-from core.events import *
+from core.events.base import *
+from core.events.centralized_scheduler_events import *
+from core.events.worker_events import *
 
 from schedulers.centralized.scheduler import Scheduler
 

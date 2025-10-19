@@ -23,7 +23,7 @@ class Job(object):
         self.completed_tasks = []
         self.create_time = create_time  
         self.end_time = create_time
-        self.slo = 0 if SLO_GRANULARITY == "TASK" else slo
+        self.slo = slo
 
 
     def __hash__(self):
@@ -45,7 +45,7 @@ class Job(object):
             Returns the minimum remaining time to finish the job
             without batching, given [init_proc_times: task_id -> time] where
             each [task_id: int] is processed in [time: float] amount of time.
-
+            
             By default, assumes all completed tasks take 0 extra time to
             complete, and calculates tasks not in [init_proc_times] with best
             execution time.
@@ -107,7 +107,8 @@ class Job(object):
                                                 model_size=task_cfg["MODEL_SIZE"],
                                                 batch_sizes=task_cfg["BATCH_SIZES"],
                                                 batch_exec_times=task_cfg["MIG_BATCH_EXEC_TIMES"],
-                                                exec_time_cv=task_cfg["EXEC_TIME_CV"])
+                                                exec_time_cv=task_cfg["EXEC_TIME_CV"],
+                                                checkpoints=task_cfg["CHECKPOINTS"])
 
             current_task = Task(self,
                                 self.id,  # ID of the associated unique Job
