@@ -15,10 +15,14 @@ from core.config import *
 from core.metadata_service import *
 from core.print_utils import *
 from core.external_client import *
-from core.events import *
+
+from core.events.base import *
+from core.events.centralized_scheduler_events import *
+from core.events.worker_events import *
 
 from workers.heft_task_worker import *
 from workers.shepherd_task_worker import *
+from workers.hash_task_worker import *
 
 from schedulers.algo.herd_algo import get_herd_assignment
 from schedulers.centralized.shepherd.herd_assignment import HerdAssignment
@@ -47,10 +51,7 @@ class Simulation(object):
         self.workers = []
         self.metadata_service = MetadataService()
         self.external_clients = []
-
-        # self.curr_num_nodes = MIN_NUM_NODES
-
-        # self.curr_jobs_in_processing = 0
+        
         self.remaining_jobs = sum(cc[jt]["NUM_JOBS"] for cc in CLIENT_CONFIGS for jt in cc.keys())
         self.event_queue = PriorityQueue()
 
@@ -100,6 +101,8 @@ class Simulation(object):
             group_workers = []
             if self.simulation_name == "shepherd":
                 group_workers = [ShepherdWorker(self, worker_counter+j, 24, i) for j in range(int(group_size))]
+            elif self.simulation_name in ["nexus", "hashtask"]:
+                group_workers = [HashTaskWorker(self, worker_counter+j, 24, group_id=i) for j in range(int(group_size))]
             else:
                 group_workers = [HeftTaskWorker(self, worker_counter+j, 24, group_id=i) for j in range(int(group_size))]
 
@@ -263,6 +266,8 @@ class Simulation(object):
                 for i, config in enumerate(worker_configs):
                     if self.simulation_name == "shepherd":
                         self.workers.append(ShepherdWorker(self, i, config[0], 0))
+                    elif self.simulation_name in ["nexus", "hashtask"]:
+                        self.workers.append(HashTaskWorker(self, i, config[0]))
                     else:
                         self.workers.append(HeftTaskWorker(self, i, config[0]))
                     for model in config[1]:
@@ -339,14 +344,12 @@ class Simulation(object):
                 stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
                 stats_dict["clients"][-1][job_type]["total_num_complete"] = len(completed_jobs)
 
-                if SLO_GRANULARITY == "JOB":
+                if SLO_GRANULARITY == "JOB" or self.simulation_name == "nexus":
                     nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
                     stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
 
-                    tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo) and \
-                                 j.end_time <= j.create_time + (j.slo * (1 + SLO_SLACK))]
+                    tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo)]
                     
-                    stats_dict["clients"][-1][job_type][f"jobs_within_{1+SLO_SLACK}slo_per_sec"] = _get_jobs_per_sec(nontardy_jobs + tardy_jobs)
                     stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
 
                     job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]

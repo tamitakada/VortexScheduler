@@ -11,10 +11,10 @@ VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    {1: {"NUM_JOBS": 3000,
-         "SEND_RATES": [40],
+    {0: {"NUM_JOBS": 10000,
+         "SEND_RATES": [95],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 300}}
+         "SLO": 111}}
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -35,6 +35,7 @@ HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 SHEPHERD_BATCHING_POLICY = "OPTIMAL"
 
+
 """  -------        Boost Parameters  --------- """
 
 BOOST_PARAMETER = 0.00104567474
@@ -42,8 +43,10 @@ BOOST_PARAMETER = 0.00104567474
 
 """  -------        General Scheduling Parameters  --------- """
 
-SLO_SLACK = 0.1
-SLO_GRANULARITY = "JOB" # TASK | JOB
+# OPTIMAL | LARGEST
+# [OPTIMAL] Largest batch for which all task SLOs are met
+# [LARGEST] Largest batch < model max batch size
+BATCH_POLICY = "OPTIMAL"
 
 # CLUSTER_ADMISSION_LIMIT | TASK_ADMISSION_LIMIT | OPTIMAL | LATEST_POSSIBLE | NONE
 DROP_POLICY = "OPTIMAL"

@@ -18,19 +18,22 @@ DECENTRALHEFT = 1
 CENTRALHEFT = 2
 HASHTASK = 3
 SHEPHERD = 4
+NEXUS = 5
 
 SCHEDULER_NAMES = bidict({
     NO_SCHEDULER: "no_scheduler",
     DECENTRALHEFT: "decentralheft",
     CENTRALHEFT: "centralheft",
     HASHTASK: "hashtask",
-    SHEPHERD: "shepherd"
+    SHEPHERD: "shepherd",
+    NEXUS: "nexus"
 })
 
 def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str):
-    assert(scheduler_type in [NO_SCHEDULER, DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD])
+    assert(scheduler_type in [NO_SCHEDULER, DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD, NEXUS])
     assert(scheduler_type != SHEPHERD or not ENABLE_MULTITHREADING) # concurrency not implemented for Shepherd
     assert(ALLOCATION_STRATEGY != "HERD" or ENABLE_DYNAMIC_MODEL_LOADING) # if HERD, dynamic loading must be enabled
+    assert(scheduler_type != NEXUS or SLO_GRANULARITY == "TASK") # Nexus requires task-level SLO split
 
     out_path = os.path.join(out_path_root, SCHEDULER_NAMES[scheduler_type])
     if not os.path.exists(out_path):
@@ -56,6 +59,10 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
         sim = Simulation_central(simulation_name="shepherd", job_split="PER_TASK",
                                  num_workers=TOTAL_NUM_OF_NODES, job_types_list=job_types,
                                  produce_breakdown=True)
+    elif scheduler_type == NEXUS:
+        sim = Simulation_central(simulation_name="nexus", job_split="PER_TASK",
+                                 num_workers=TOTAL_NUM_OF_NODES, job_types_list=job_types,
+                                 produce_breakdown=True)
 
     sim.run()
 
@@ -79,6 +86,10 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
 
     sim.task_drop_log.to_csv(os.path.join(out_path, "drop_log.csv"))
 
+    if scheduler_type == NEXUS:
+        sim.scheduler.wf_arrival_rate_log.to_csv(os.path.join(out_path, "nexus_job_arrival_rate_log.csv"))
+        sim.scheduler.task_slo_log.to_csv(os.path.join(out_path, "nexus_task_slo_log.csv"))
+
     with open(os.path.join(out_path, "stats.json"), "w") as f:
         f.write(json.dumps(sim.sim_stats_log))
         f.close()
@@ -99,7 +110,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask"])
+    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask", "nexus"])
     parser.add_argument("-o", "--out", type=str, default="results", help="Path to output directory")
     
     args = parser.parse_args()

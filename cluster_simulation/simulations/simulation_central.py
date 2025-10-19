@@ -7,6 +7,7 @@ from schedulers.algo.herd_algo import *
 from schedulers.centralized.hashtask_scheduler import HashTaskScheduler
 from schedulers.centralized.heft_scheduler import HeftScheduler
 from schedulers.centralized.shepherd.shepherd_scheduler import ShepherdScheduler
+from schedulers.centralized.nexus_scheduler import NexusScheduler
 
 
 class Simulation_central(Simulation):
@@ -28,6 +29,8 @@ class Simulation_central(Simulation):
             self.scheduler = HashTaskScheduler(self, self.herd_assignment)
         elif self.simulation_name == "shepherd":
             self.scheduler = ShepherdScheduler(self, self.herd_assignment)
+        elif self.simulation_name == "nexus":
+            self.scheduler = NexusScheduler(self, self.herd_assignment)
 
     def schedule_job_and_send_tasks(self, job, current_time):
         return self.scheduler.schedule_job_on_arrival(job, current_time)

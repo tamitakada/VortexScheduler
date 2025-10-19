@@ -73,6 +73,7 @@ class HashTaskWorker(TaskWorker):
         assert(BATCH_POLICY in ["LARGEST", "OPTIMAL"])
         assert(len(task_queue) > 0)
 
+        # TODO: bsize 1 correct handling
         if BATCH_POLICY == "LARGEST" or task_queue[0].max_batch_size <= 1:
             tasks = []
             for task in task_queue:

@@ -14,7 +14,7 @@ class OrderedTask:
         self.task_arrival_time = current_time
 
         if SLO_GRANULARITY == "TASK":
-            self.deadline = task.job.create_time + task.slo
+            self.deadline = task.job.create_time + task.slo * (1 + SLO_SLACK)
         else:
             self.deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
 
