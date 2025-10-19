@@ -2,6 +2,7 @@ from core.workflow import *
 from core.model import *
 from core.task import *
 from core.config import *
+from core.model_config import *
 
 
 class Job(object):
@@ -98,26 +99,31 @@ class Job(object):
         """
         job_cfg = WORKFLOW_LIST[self.job_type_id]
         self.job_name = job_cfg["JOB_NAME"]
+
+        models = []
+        for i, model_config in enumerate(MODELS):
+            models.append(Model(
+                model_id=i, 
+                model_size=model_config["MODEL_SIZE"],
+                batch_sizes=model_config["BATCH_SIZES"],
+                batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
+                exec_time_cv=model_config["EXEC_TIME_CV"],
+                checkpoints=model_config["CHECKPOINTS"]))
         
         for task_cfg in job_cfg["TASKS"]:
             required_model_for_task = None
             if task_cfg["MODEL_ID"] > -1:
-                required_model_for_task = Model(job_type_id=job_cfg["JOB_TYPE"],
-                                                model_id=task_cfg["MODEL_ID"],
-                                                model_size=task_cfg["MODEL_SIZE"],
-                                                batch_sizes=task_cfg["BATCH_SIZES"],
-                                                batch_exec_times=task_cfg["MIG_BATCH_EXEC_TIMES"],
-                                                exec_time_cv=task_cfg["EXEC_TIME_CV"])
+                required_model_for_task = models[task_cfg["MODEL_ID"]]
 
             current_task = Task(self,
                                 self.id,  # ID of the associated unique Job
                                 task_cfg["TASK_INDEX"],  # taskID
                                 (self.job_type_id, task_cfg["TASK_INDEX"]), # task type
-                                task_cfg["EXECUTION_TIME"], 
+                                0, 
                                 required_model_for_task, 
                                 task_cfg["INPUT_SIZE"],
                                 task_cfg["OUTPUT_SIZE"],
-                                task_cfg["MAX_BATCH_SIZE"],
+                                required_model_for_task.batch_sizes[-1] if required_model_for_task else 1, # TODO: max batch size for no model tasks?
                                 task_cfg["MAX_WAIT_TIME"],
                                 task_cfg["SLO"] if SLO_GRANULARITY == "TASK" else 0,
                                 task_cfg["MAX_EMIT_BATCH_SIZE"])

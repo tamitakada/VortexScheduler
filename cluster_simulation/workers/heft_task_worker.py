@@ -224,8 +224,9 @@ class HeftTaskWorker(TaskWorker):
                     task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
                     task_arrival = task.log.job_creation_timestamp
 
-            # drop tasks whose SLO can't be met
-            if (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline:
+            if (DROP_POLICY == "LATEST_POSSIBLE" and current_time >= task_deadline) or \
+                (DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline):
+                
                 for job_task in task.job.tasks:
                     self.rm_task_in_queue_history(job_task, current_time)
                 self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
@@ -258,7 +259,7 @@ class HeftTaskWorker(TaskWorker):
         """
         events = []
 
-        if self.simulation.simulation_name == "hashtask":
+        if self.simulation.simulation_name in ["hashtask", "nexus"]:
             ready_tasks = []
             for task in batch.tasks:
                 ready_tasks += task.job.newly_available_tasks(task)

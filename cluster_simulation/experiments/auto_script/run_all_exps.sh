@@ -20,13 +20,14 @@ run_experiment() {
         -e "s/^HERD_K = .*$/HERD_K = ${cfg_prop_list[11]}/" \
         -e "s/^HERD_PERIODICITY = .*$/HERD_PERIODICITY = ${cfg_prop_list[12]}/" \
         -e "s/^SHEPHERD_BATCHING_POLICY = .*$/SHEPHERD_BATCHING_POLICY = ${cfg_prop_list[13]}/" \
-        -e "s/^SLO_SLACK = .*$/SLO_SLACK = ${cfg_prop_list[14]}/" \
-        -e "s/^SLO_GRANULARITY = .*$/SLO_GRANULARITY = ${cfg_prop_list[15]}/" \
-        -e "s/^ENABLE_MULTITHREADING = .*$/ENABLE_MULTITHREADING = ${cfg_prop_list[16]}/" \
-        -e "s/^ENABLE_MODEL_PREFETCH = .*$/ENABLE_MODEL_PREFETCH = ${cfg_prop_list[17]}/" \
-        -e "s/^ENABLE_DYNAMIC_MODEL_LOADING = .*$/ENABLE_DYNAMIC_MODEL_LOADING = ${cfg_prop_list[18]}/" \
-        -e "s/^ALLOCATION_STRATEGY = .*$/ALLOCATION_STRATEGY = '${cfg_prop_list[19]}'/" \
-        -e "s/^CUSTOM_ALLOCATION = .*$/CUSTOM_ALLOCATION = ${cfg_prop_list[20]}/" \
+        -e "s/^DROP_POLICY = .*$/DROP_POLICY = ${cfg_prop_list[14]}/" \
+        -e "s/^SLO_SLACK = .*$/SLO_SLACK = ${cfg_prop_list[15]}/" \
+        -e "s/^SLO_GRANULARITY = .*$/SLO_GRANULARITY = ${cfg_prop_list[16]}/" \
+        -e "s/^ENABLE_MULTITHREADING = .*$/ENABLE_MULTITHREADING = ${cfg_prop_list[17]}/" \
+        -e "s/^ENABLE_MODEL_PREFETCH = .*$/ENABLE_MODEL_PREFETCH = ${cfg_prop_list[18]}/" \
+        -e "s/^ENABLE_DYNAMIC_MODEL_LOADING = .*$/ENABLE_DYNAMIC_MODEL_LOADING = ${cfg_prop_list[19]}/" \
+        -e "s/^ALLOCATION_STRATEGY = .*$/ALLOCATION_STRATEGY = '${cfg_prop_list[20]}'/" \
+        -e "s/^CUSTOM_ALLOCATION = .*$/CUSTOM_ALLOCATION = ${cfg_prop_list[21]}/" \
         auto_script/config_template.py
 
     # remove quotes

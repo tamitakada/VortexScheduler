@@ -53,7 +53,13 @@ BOOST_PARAMETER = 0.00104567474
 SLO_SLACK = 0.1
 SLO_GRANULARITY = "JOB" # TASK | JOB
 
-ENABLE_MULTITHREADING = False # allow multiple models on same partition to run at once
+# CLUSTER_ADMISSION_LIMIT | TASK_ADMISSION_LIMIT | OPTIMAL | LATEST_POSSIBLE | NONE
+DROP_POLICY = "OPTIMAL"
+
+SLO_SLACK = 0
+SLO_GRANULARITY = "JOB" # TASK | JOB
+
+ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
 ENABLE_MODEL_PREFETCH = False
 ENABLE_DYNAMIC_MODEL_LOADING = False
 
@@ -65,7 +71,7 @@ USE_BOOST = False
 ALLOCATION_STRATEGY = "CUSTOM"
 
 # [(partition size in GB, [model ids])]
-CUSTOM_ALLOCATION = [(24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2])]
+CUSTOM_ALLOCATION = [(12, [4]), (12, [5,6]), (12, [7]), (12, [7]), (12, [7]), (12, [7]), (12, [7]), (12, [7])]
 
 # ppl1 4 node real alloc:
 # [(24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2])]

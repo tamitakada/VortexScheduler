@@ -4,44 +4,49 @@
             "TOTAL_NUM_OF_NODES": 4,
             "CLIENT_CONFIGS": [
                 {"0": {
-                    "NUM_JOBS": 2500,
-                    "SEND_RATES": [55],
+                    "NUM_JOBS": 10000,
+                    "SEND_RATES": [95],
                     "SEND_RATE_CHANGE_INTERVALS": [], 
-                    "SLO": "np.inf"
+                    "SLO": 188
                 }}
             ],
-            "WORKLOAD_DISTRIBUTION": "CONSTANT",
+            "WORKLOAD_DISTRIBUTION": "POISSON",
             "HERD_PERIODICITY": 0,
-            "SLO_SLACK": 0.1,
-            "ENABLE_MULTITHREADING": true,
-            "ENABLE_MODEL_PREFETCH": true,
+            "SLO_SLACK": 0,
+            "SHEPHERD_BATCHING_POLICY": "FIRST_TASK_DEADLINE",
+            "ENABLE_MULTITHREADING": false,
+            "ENABLE_MODEL_PREFETCH": false,
             "ENABLE_DYNAMIC_MODEL_LOADING": false,
             "ALLOCATION_STRATEGY": "CUSTOM",
             "CUSTOM_ALLOCATION": [
                 {"24": [1]}, {"24": [1]}, {"24": [1]}, 
                 {"6": [3]}, {"6": [3]},{"6": [3]}, {"6": [0,2]}],
-            "SCHEDULER_TYPE": "hashtask",
-            "OUT_PATH": "ht-p1-55-test"
+            "SCHEDULER_TYPE": "shepherd",
+            "OUT_PATH": "shep-95-188slo-first-task"
         },
         {
-            "TOTAL_NUM_OF_NODES": 8,
+            "TOTAL_NUM_OF_NODES": 4,
             "CLIENT_CONFIGS": [
                 {"0": {
-                    "NUM_JOBS": 2000,
-                    "SEND_RATES": [55, 125],
-                    "SEND_RATE_CHANGE_INTERVALS": [1000], 
-                    "SLO": 100
+                    "NUM_JOBS": 10000,
+                    "SEND_RATES": [55],
+                    "SEND_RATE_CHANGE_INTERVALS": [], 
+                    "SLO": 115
                 }}
             ],
-            "HERD_PERIODICITY": 20000,
-            "SLO_SLACK": 0.1,
+            "WORKLOAD_DISTRIBUTION": "POISSON",
+            "HERD_PERIODICITY": 0,
+            "SLO_SLACK": 0,
+            "SHEPHERD_BATCHING_POLICY": "FIRST_TASK_DEADLINE",
             "ENABLE_MULTITHREADING": false,
-            "ENABLE_MODEL_PREFETCH": true,
-            "ENABLE_DYNAMIC_MODEL_LOADING": true,
-            "ALLOCATION_STRATEGY": "HERD",
-            "CUSTOM_ALLOCATION": [],
+            "ENABLE_MODEL_PREFETCH": false,
+            "ENABLE_DYNAMIC_MODEL_LOADING": false,
+            "ALLOCATION_STRATEGY": "CUSTOM",
+            "CUSTOM_ALLOCATION": [
+                {"24": [1]}, {"24": [1]}, {"24": [1]}, 
+                {"6": [3]}, {"6": [3]},{"6": [3]}, {"6": [0,2]}],
             "SCHEDULER_TYPE": "shepherd",
-            "OUT_PATH": "shep-55-125-test"
+            "OUT_PATH": "shep-55-115slo-first-task"
         }
     ]
 }

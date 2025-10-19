@@ -1,6 +1,9 @@
 from random import randint
 from core.workflow import *
 from core.config import *
+from core.model_config import *
+
+import scipy
 
 
 class Model:
@@ -8,45 +11,60 @@ class Model:
     Description of Model
     """
 
-    def __init__(self, job_type_id: int, model_id: int, model_size: float, 
-                 batch_sizes: list[int], batch_exec_times: list[float], exec_time_cv: float):
-        self.job_type_id = job_type_id
+    def __init__(self, model_id: int, model_size: float, 
+                 batch_sizes: list[int], batch_exec_times: list[float], exec_time_cv: float, checkpoints: dict[int,list[int]]):        
         self.model_id = model_id
         self.model_size = model_size
-        self.batch_sizes = batch_sizes
-        self.batch_exec_times = batch_exec_times
         self.exec_time_cv = exec_time_cv
+        self.checkpoints = checkpoints
+
+        self.max_batch_size = batch_sizes[-1]
+        
+        # must at least have exec time data for bsize = 1
+        assert(1 in batch_sizes and len(batch_exec_times) >= 1)
+
+        self.batch_sizes = list(range(1, self.max_batch_size+1, 1))
+        self.batch_exec_times = {}
+
+        for size, exec_times in batch_exec_times.items():
+            # missing or excess exec time data
+            assert(len(batch_sizes) == len(exec_times))
+
+            self.batch_exec_times[size] = []
+
+            if len(batch_sizes) > 1:
+                m, b, _, _, _ = scipy.stats.linregress(batch_sizes, exec_times)
+            else:
+                m = exec_times[0]
+                b = 0
+            
+            # missing exec times are filled with above regression
+            for bsize in range(1, self.max_batch_size+1, 1):
+                if bsize in batch_sizes:
+                    self.batch_exec_times[size].append(exec_times[batch_sizes.index(bsize)])
+                else:
+                    self.batch_exec_times[size].append(m * bsize + b)
 
     def __hash__(self):
         return hash(self.model_id)
 
     def __eq__(self, other):
         if isinstance(other, Model):
-            return self.model_id == other.model_id and self.job_type_id == other.job_type_id
+            return self.model_id == other.model_id
         return False
 
     def __ne__(self, other):
         return not (self == other)
 
     def __str__(self):
-        return ("Model belongs to Job "
-                + str(self.job_type_id)
-                + ", Model ID: "
+        return ("Model ID: "
                 + str(self.model_id)
                 + " (size:"
                 + str(self.model_size)
                 + "KB)")
 
     def to_string(self):
-        return (
-            "Model: job_id"
-            + str(self.job_id)
-            + " , model_id:"
-            + str(self.model_id)
-            + " (size:"
-            + str(self.model_size)
-            + ")"
-        )
+        return self.__str__()
     
     def get_exec_time(self, batch_size: int, partition_size: int) -> float:
         """
@@ -67,20 +85,23 @@ def parse_models_from_workflows() -> dict:
     Helper function for Simulation: upon Resource Module initialization read "workflow.py" and extract how many models there are
     Returns: {job_type_id1:[model1, model2 ...], job_type_id2:[]} a dict of model for different jobs
     """
+    models = []
+    for i, model_config in enumerate(MODELS):
+        models.append(Model(
+            model_id=i, 
+            model_size=model_config["MODEL_SIZE"],
+            batch_sizes=model_config["BATCH_SIZES"],
+            batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
+            exec_time_cv=model_config["EXEC_TIME_CV"],
+            checkpoints=model_config["CHECKPOINTS"]))
 
     job_models_dict = dict()
     for i, job in enumerate(WORKFLOW_LIST):
         # print(job)
-        models = []
-        for model in WORKFLOW_LIST[i]["TASKS"]:
-            if model["MODEL_ID"] != -1:
-                models.append(Model(
-                    job_type_id=job["JOB_TYPE"], 
-                    model_id=model["MODEL_ID"], 
-                    model_size=model["MODEL_SIZE"],
-                    batch_sizes=model["BATCH_SIZES"],
-                    batch_exec_times=model["MIG_BATCH_EXEC_TIMES"],
-                    exec_time_cv=model["EXEC_TIME_CV"]))
+        workflow_models = []
+        for task in WORKFLOW_LIST[i]["TASKS"]:
+            if task["MODEL_ID"] != -1:
+                workflow_models.append(models[task["MODEL_ID"]])
         job_models_dict[job["JOB_TYPE"]] = models
 
     # print(job_models_dict)
