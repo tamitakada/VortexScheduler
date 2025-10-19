@@ -1,5 +1,5 @@
 from core.task import Task
-from core.config import *
+from core.configs.gen_config import *
 
 from schedulers.algo.boost_algo import get_task_boost
 
@@ -18,7 +18,8 @@ class OrderedTask:
         else:
             self.deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
 
-        self.boost = get_task_boost(task)
+        if USE_BOOST:
+            self.boost = get_task_boost(task)
 
     def __lt__(self, other):
         if USE_BOOST:

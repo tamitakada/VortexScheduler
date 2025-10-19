@@ -1,13 +1,13 @@
 from queue import PriorityQueue
 
-from core.config import *
+from core.configs.gen_config import *
 from core.task import Task
 from core.batch import Batch
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 from core.network import *
-from core.workflow import *
+from core.configs.workflow_config import *
 
 from workers.worker import Worker
 
@@ -126,7 +126,7 @@ class NexusScheduler(Scheduler):
                 if min_gpus_k < min_gpus[task.task_id][t][0]:
                     min_gpus[task.task_id][t] = (min_gpus_k, opt_bsize, (t, 0))
 
-        next_tasks = [job.get_task_by_id(id) for t in final_tasks for id in t.required_task_ids]
+        next_tasks = [t for t in job.tasks if len(t.next_task_ids) == 1 and any(ft.task_id == t.next_task_ids[0] for ft in final_tasks)]
         while next_tasks:
             for task in next_tasks:
                 for t in range(TIME_STEP, job.slo + 1, TIME_STEP):
@@ -194,7 +194,6 @@ class NexusScheduler(Scheduler):
 
             new_task_slos = self.get_task_slos(job, arrival_rate)
             self.workflow_task_slos[workflow_id] = new_task_slos
-            print(new_task_slos)
 
             # log SLO update
             for task in job.tasks:

@@ -1,7 +1,7 @@
 from random import randint
-from core.workflow import *
-from core.config import *
-from core.model_config import *
+from core.configs.workflow_config import *
+from core.configs.gen_config import *
+from core.configs.model_config import *
 
 import scipy
 
@@ -12,11 +12,10 @@ class Model:
     """
 
     def __init__(self, model_id: int, model_size: float, 
-                 batch_sizes: list[int], batch_exec_times: list[float], exec_time_cv: float, checkpoints: dict[int,list[int]]):        
+                 batch_sizes: list[int], batch_exec_times: list[float], exec_time_cv: float):        
         self.model_id = model_id
         self.model_size = model_size
         self.exec_time_cv = exec_time_cv
-        self.checkpoints = checkpoints
 
         self.max_batch_size = batch_sizes[-1]
         
@@ -92,8 +91,7 @@ def parse_models_from_workflows() -> dict:
             model_size=model_config["MODEL_SIZE"],
             batch_sizes=model_config["BATCH_SIZES"],
             batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
-            exec_time_cv=model_config["EXEC_TIME_CV"],
-            checkpoints=model_config["CHECKPOINTS"]))
+            exec_time_cv=model_config["EXEC_TIME_CV"]))
 
     job_models_dict = dict()
     for i, job in enumerate(WORKFLOW_LIST):

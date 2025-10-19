@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.config import *
+from core.configs.gen_config import *
 from core.task import Task
 
 

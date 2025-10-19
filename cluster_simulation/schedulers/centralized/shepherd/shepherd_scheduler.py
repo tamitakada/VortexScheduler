@@ -1,18 +1,19 @@
 from queue import PriorityQueue
 
-from core.config import *
+from core.configs.gen_config import *
 from core.task import Task
 from core.batch import Batch
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 from core.network import *
-from core.workflow import *
+from core.configs.workflow_config import *
 
 from workers.worker import Worker
 
 from schedulers.centralized.scheduler import Scheduler
 from schedulers.centralized.shepherd.ordered_task import OrderedTask
+from schedulers.algo.batching_policies import get_batch
 
 import pandas as pd
 
@@ -256,7 +257,7 @@ class ShepherdScheduler(Scheduler):
             largest_batch_model_id, largest_batch_size = self._flex_get_largest_candidate_batch(group, current_time, for_worker=worker)
 
             if curr_batch_size == 0 and largest_batch_size > 0:
-                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                batch = self._form_largest_batch(largest_batch_model_id, current_time, pop=True)
 
                 assert(batch.size() == largest_batch_size)
 
@@ -268,7 +269,7 @@ class ShepherdScheduler(Scheduler):
                     current_time + CPU_to_CPU_delay(batch.size()*batch.tasks[0].input_size), 
                     BatchArrivalAtWorker(self.simulation, worker, batch)))
             elif largest_batch_size > 0 and largest_batch_size >= FLEX_LAMBDA * curr_batch_size:
-                batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+                batch = self._form_largest_batch(largest_batch_model_id, current_time, pop=True)
                 
                 assert(batch.size() == largest_batch_size)
                 
@@ -318,84 +319,23 @@ class ShepherdScheduler(Scheduler):
             for ot in skipped_tasks:
                 model_queue.put(ot)
 
-    def _form_largest_batch(self, model_id: int, time: float, pop=False) -> list[Task]:
+    def _form_largest_batch(self, model_id: int, time: float, pop=False) -> Batch | None:
         model_queue = self.model_queues[model_id]
         if model_queue.qsize() == 0:
             return []
-        tasks = []
-        max_bsize = model_queue.queue[0].task.max_batch_size
-        if SHEPHERD_BATCHING_POLICY == "OPTIMAL":
-            sorted_queue = sorted(model_queue.queue, key=lambda ot: ot.deadline - ot.task.job.get_min_remaining_processing_time())
-            bsizes = [[0 for j in range(max_bsize)] for i in range(model_queue.qsize())]
-            for i in range(model_queue.qsize()-1, -1, -1):
-                for j in range(max_bsize-1, 0, -1):
-                    ot = sorted_queue[i]
-                    min_rem_ppl_time = ot.task.job.get_min_remaining_processing_time(init_proc_times={ot.task.task_id: ot.task.model.batch_exec_times[24][ot.task.model.batch_sizes.index(j)]})
-                    if time + min_rem_ppl_time > ot.deadline:
-                        # on SLO violation, task [i] cannot be incl. in batch of size [j]
-                        bsizes[i][j] = 0
-                    elif i == (model_queue.qsize()-1): # if on last task and no SLO violation, always 1
-                        bsizes[i][j] = 1
-                    else:
-                        bsizes[i][j] = max(bsizes[i+1][j-1] + 1, # either task [i] in batch of size [j]
-                                           bsizes[i+1][j])       # or not
-            
-            max_i, max_j, max_formable_bsize = 0, 0, 0
-            for i in range(len(bsizes)):
-                for j in range(len(bsizes[i])):
-                    if bsizes[i][j] > max_formable_bsize:
-                        max_formable_bsize = bsizes[i][j]
-                        max_i = i
-                        max_j = j
-            
-            if max_formable_bsize == 0:
-                # if all SLOs are violated, default to largest batch size
-                tasks = sorted_queue[:max_bsize]
-            else:
-                counter = max_i
-                while counter < (max_i + max_j):
-                    tasks.append(sorted_queue[counter])
-                    counter += 1
-            
-            if pop:
-                for task in tasks:
-                    model_queue.queue.remove(task)
-                model_queue.queue.sort()
-
-            return [ot.task for ot in tasks]
-
-        first_deadline = 0
-        skipped_tasks = []
-        model_queue = self.model_queues[model_id]
-        curr_queue_idx = 0
-        while ((pop and model_queue.qsize() > 0) or (not pop and curr_queue_idx < model_queue.qsize())) and len(tasks) < max_bsize:
-            ot = model_queue.get() if pop else model_queue.queue[curr_queue_idx]
-
-            if SHEPHERD_BATCHING_POLICY == "BEST_EXEC_TIME_ONLY":
-                tasks.append(ot.task)
-            elif SHEPHERD_BATCHING_POLICY == "FIRST_TASK_DEADLINE":
-                if len(tasks) == 0:
-                    tasks.append(ot.task)
-                    first_deadline = ot.deadline
-                else:
-                    # break once first task SLO cannot be satisfied anymore
-                    if (time + ot.task.model.batch_exec_times[24][ot.task.model.batch_sizes.index(len(tasks))]) > first_deadline:
-                        if pop: skipped_tasks.append(ot)
-                        break
-                    else:
-                        tasks.append(ot.task)
-                        
-            curr_queue_idx += 1
         
-        for ot in skipped_tasks:
-            model_queue.put(ot)
-        return tasks
-
-    def _flex_form_largest_batch(self, model_id: int, time: float) -> Batch:
-        """
-            Form the largest batch available in [self.model_queues[model_id]].
-        """
-        return Batch(self._form_largest_batch(model_id, time, pop=True))
+        batch = get_batch(time, 24, [ot.task for ot in model_queue.queue])
+        if batch and pop:
+            tasks_to_requeue = []
+            while model_queue.qsize() > 0:
+                ot = model_queue.get()
+                if ot.task not in batch.tasks:
+                    tasks_to_requeue.append(ot)
+            
+            for ot in tasks_to_requeue:
+                model_queue.put(ot)
+        
+        return batch
 
     def _flex_get_largest_candidate_batch(self, group: int, current_time: float, for_worker: Worker=None):
         """
@@ -419,8 +359,8 @@ class ShepherdScheduler(Scheduler):
                     continue
 
             largest_batch = self._form_largest_batch(mid, current_time)
-            if len(largest_batch) > largest_batch_size:
-                largest_batch_size = len(largest_batch)
+            if largest_batch and largest_batch.size() > largest_batch_size:
+                largest_batch_size = largest_batch.size()
                 largest_batch_model_id = mid
         return (largest_batch_model_id, largest_batch_size)
     
@@ -467,7 +407,7 @@ class ShepherdScheduler(Scheduler):
             for_worker=worker)
 
         if largest_batch_size > 0:
-            batch = self._flex_form_largest_batch(largest_batch_model_id, current_time)
+            batch = self._form_largest_batch(largest_batch_model_id, current_time, pop=True)
 
             if DROP_POLICY == "OPTIMAL":
                 self._drop_tasks(current_time, batch)

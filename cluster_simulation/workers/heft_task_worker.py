@@ -357,7 +357,6 @@ class HeftTaskWorker(TaskWorker):
                     self.queue_history[task.task_type][last_index][1].append(task)
                 break
             if self.queue_history[task.task_type][last_index][0] < current_time:
-                # print("2")
                 if task not in self.queue_history[task.task_type][last_index][1]:
                     next_queue = self.queue_history[task.task_type][last_index][1].copy()
                     next_queue.append(task)

@@ -11,7 +11,7 @@ from gurobipy import GRB
 
 from queue import PriorityQueue
 
-from core.config import *
+from core.configs.gen_config import *
 from core.metadata_service import *
 from core.print_utils import *
 from core.external_client import *

@@ -1,8 +1,8 @@
-from core.workflow import *
+from core.configs.workflow_config import *
 from core.model import *
 from core.task import *
-from core.config import *
-from core.model_config import *
+from core.configs.gen_config import *
+from core.configs.model_config import *
 
 
 class Job(object):
@@ -107,8 +107,7 @@ class Job(object):
                 model_size=model_config["MODEL_SIZE"],
                 batch_sizes=model_config["BATCH_SIZES"],
                 batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
-                exec_time_cv=model_config["EXEC_TIME_CV"],
-                checkpoints=model_config["CHECKPOINTS"]))
+                exec_time_cv=model_config["EXEC_TIME_CV"]))
         
         for task_cfg in job_cfg["TASKS"]:
             required_model_for_task = None

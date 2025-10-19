@@ -1,5 +1,5 @@
 from core.simulation import *
-from core.config import *
+from core.configs.gen_config import *
 
 from workers.taskworker import *
 

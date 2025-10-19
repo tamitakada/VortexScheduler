@@ -11,6 +11,7 @@ from core.batch import Batch
 
 from schedulers.centralized.heft_scheduler import HeftScheduler
 from schedulers.algo.boost_algo import get_task_boost
+from schedulers.algo.batching_policies import get_batch
 
 
 class HashTaskWorker(TaskWorker):
@@ -68,71 +69,6 @@ class HashTaskWorker(TaskWorker):
         return events
 
     #  --------------------------- DECENTRALIZED WORKER SCHEDULING  ----------------------
-
-    def get_candidate_batch(self, task_queue: list[Task], current_time: float) -> Batch | None:
-        assert(BATCH_POLICY in ["LARGEST", "OPTIMAL"])
-        assert(len(task_queue) > 0)
-
-        # TODO: bsize 1 correct handling
-        if BATCH_POLICY == "LARGEST" or task_queue[0].max_batch_size <= 1:
-            tasks = []
-            for task in task_queue:
-                tasks.append(task)
-
-                if len(tasks) >= task.max_batch_size:
-                    break
-
-            if len(tasks) == 0:
-                return None
-            
-            return Batch(tasks)
-        elif BATCH_POLICY == "OPTIMAL":
-            # sort by deadline to allow optimal batch to be taken from contiguous section
-            task_queue = sorted(task_queue, 
-                                     key=lambda t: t.log.task_placed_on_worker_queue_timestamp + t.slo * (1 + SLO_SLACK) if SLO_GRANULARITY == "TASK" else \
-                                        t.log.job_creation_timestamp + t.job.slo * (1 + SLO_SLACK))
-
-            max_bsize = task_queue[0].max_batch_size
-
-            tasks = []
-            bsizes = [[0 for _ in range(max_bsize)] for _ in range(len(task_queue))]
-
-            for i in range(len(task_queue) - 1, -1, -1):
-                for j in range(max_bsize - 1, 0, -1):
-                    task = task_queue[i]
-
-                    # get correct task deadline
-                    if SLO_GRANULARITY == "TASK":
-                        task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
-                    else:
-                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
-
-                    if (current_time + task.model.batch_exec_times[24][j]) > task_deadline:
-                        # on SLO violation, task [i] cannot be incl. in batch of size [j]
-                        bsizes[i][j] = 0
-                    elif i == (len(task_queue)-1): # if on last task and no SLO violation, always 1
-                        bsizes[i][j] = 1
-                    else:
-                        bsizes[i][j] = max(bsizes[i+1][j-1] + 1, # either task [i] in batch of size [j]
-                                            bsizes[i+1][j])       # or not
-            
-            max_i, max_j, max_formable_bsize = 0, 0, 0
-            for i in range(len(bsizes)):
-                for j in range(len(bsizes[i])):
-                    if bsizes[i][j] > max_formable_bsize:
-                        max_formable_bsize = bsizes[i][j]
-                        max_i = i
-                        max_j = j
-            
-            counter = max_i
-            while counter < (max_i + max_j):
-                tasks.append(task_queue[counter])
-                counter += 1
-
-            if len(tasks) == 0:
-                return None
-            
-            return Batch(tasks)
     
     def check_task_queue(self, task_type, current_time):
         if USE_BOOST:
@@ -182,7 +118,7 @@ class HashTaskWorker(TaskWorker):
         assert((self.simulation.task_drop_log["job_id"]!=task.job_id).all() for task in task_queue)
 
         if len(task_queue) > 0:
-            batch = self.get_candidate_batch(task_queue, current_time)
+            batch = get_batch(current_time, self.total_memory, task_queue)
             if batch:
                 batch_events = self.maybe_start_batch(batch, current_time)
 

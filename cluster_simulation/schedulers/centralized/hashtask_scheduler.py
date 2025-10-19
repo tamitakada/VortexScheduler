@@ -1,4 +1,4 @@
-from core.config import *
+from core.configs.gen_config import *
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *

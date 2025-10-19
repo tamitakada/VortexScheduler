@@ -1,6 +1,6 @@
 #  Helper function for printing and ploting of each simulator
 import numpy as np
-from core.workflow import WORKFLOW_LIST
+from core.configs.workflow_config import WORKFLOW_LIST
 
 
 def print_end_jobs(last_time, complete_jobs, jobs):

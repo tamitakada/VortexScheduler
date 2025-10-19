@@ -1,6 +1,6 @@
 from core.job import *
 from core.network import *
-from core.config import *
+from core.configs.gen_config import *
 
 from core.events.base import *
 

@@ -1,6 +1,6 @@
-from core.config import *
+from core.configs.gen_config import *
 from core.model import Model
-from core.workflow import *
+from core.configs.workflow_config import *
 
 from scipy import stats
 

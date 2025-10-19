@@ -1,6 +1,6 @@
 from core.job import *
 from core.network import *
-from core.config import *
+from core.configs.gen_config import *
 
 from workers.worker import Worker
 
@@ -181,17 +181,10 @@ class BatchPreemptionScheduledAtWorker(Event):
 
             for task in self.batch.tasks:
                 task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-
-            # exec_progress = current_time - old_batch.tasks[0].log.task_execution_start_timestamp
-            # prev_checkpoint = 0
-            # for checkpoint in old_batch.model.checkpoints[self.worker.total_memory]:
-            #     if checkpoint > exec_progress:
-            #         break
-            #     prev_checkpoint = checkpoint
             
             for task in self.batch.tasks:
                 task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time, 0)
+            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time)
         else:
             # NOTE: marks as abandoned anyway in case prior assigned batch has not yet arrived
             Worker._abandoned_batches.append(self.old_batch_id)

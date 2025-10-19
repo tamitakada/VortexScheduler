@@ -26,14 +26,14 @@ class ShepherdWorker(TaskWorker):
                 BatchRejectionAtWorker(self.simulation, self, batch))]
         return events
     
-    def preempt_batch(self, old_batch_id: int, new_batch: Batch, current_time: float, resume_from: float):
+    def preempt_batch(self, old_batch_id: int, new_batch: Batch, current_time: float):
         evicted_batch = self.evict_batch(old_batch_id, current_time)
 
         if self.can_run_task(current_time, new_batch.model) == self._CAN_RUN_ON_EVICT:
             current_time += self.evict_models_from_GPU_until(
                 current_time, new_batch.model.model_size, self.FCFS_EVICTION)
 
-        events, _ = self.batch_execute(new_batch, current_time, resume_from=resume_from)
+        events, _ = self.batch_execute(new_batch, current_time)
         assert(events)
         events.append(EventOrders(
             current_time + CPU_to_CPU_delay(evicted_batch.tasks[0].input_size * evicted_batch.size()), 

@@ -1,4 +1,4 @@
-from core.workflow import *
+from core.configs.workflow_config import *
 from workers.worker import Worker
 
 import json
