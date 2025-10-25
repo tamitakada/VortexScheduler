@@ -2,12 +2,19 @@ from core.configs.gen_config import *
 from core.task import Task
 from core.batch import Batch
 
+from schedulers.algo.boost_algo import get_task_priority_by_boost, BoostPolicy
+
 
 def get_batch(time: float, partition_size: int, task_queue: list[Task]) -> Batch | None:
     """
     Returns a batch drawn from [task_queue] formed according to the batch
     policy specified in the config file.
     """
+    if BOOST_POLICY == "JOB_SIZE":
+        task_queue = sorted(task_queue, key=lambda t: get_task_priority_by_boost(t, BoostPolicy.TOTAL_JOB_TIME))
+    elif BOOST_POLICY == "REMAINING_JOB_TIME":
+        task_queue = sorted(task_queue, key=lambda t: get_task_priority_by_boost(t, BoostPolicy.REMAINING_JOB_TIME))
+
     if BATCH_POLICY == "LARGEST":
         return get_largest_batch(task_queue)
     elif BATCH_POLICY == "OPTIMAL":
@@ -45,8 +52,6 @@ def get_largest_batch_with_first_task(time: float, partition_size: int, task_que
             task.deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
         else:
             task.deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
-
-    task_queue = sorted(task_queue, key=lambda t: t.deadline)
 
     tasks = []
     for task in task_queue:

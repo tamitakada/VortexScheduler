@@ -9,8 +9,6 @@ from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 from core.batch import Batch
 
-from schedulers.centralized.heft_scheduler import HeftScheduler
-from schedulers.algo.boost_algo import get_task_boost
 from schedulers.algo.batching_policies import get_batch
 
 
@@ -33,7 +31,8 @@ class HashTaskWorker(TaskWorker):
         if len(tasks) == 0:
             return []
         
-        assert(ENABLE_DYNAMIC_MODEL_LOADING or tasks[0].model == None or tasks[0].model in self.GPU_state.placed_models(current_time))
+        assert(ENABLE_DYNAMIC_MODEL_LOADING or 
+               all(task.model == None or task.model in self.GPU_state.placed_models(current_time) for task in tasks))
 
         # add tasks to worker queue
         for task in tasks:
@@ -44,39 +43,34 @@ class HashTaskWorker(TaskWorker):
             return []
         
         # otherwise, possibly start a batch
-        return self.check_task_queue(tasks[0].task_type, current_time)
+        return self.check_task_queue(tasks[0].model.model_id, current_time)
 
-    def free_slot(self, current_time, batch: Batch, task_type):
+    def free_slot(self, current_time, batch: Batch):
         """ Attempts to launch another task. """
-        events = super().free_slot(current_time, batch, task_type)
+        events = super().free_slot(current_time, batch)
 
         # start next batch
         if ENABLE_MULTITHREADING:
-            for task_type in self.queue_history.keys():
-                batch_end_events = self.check_task_queue(task_type, current_time)
+            for mid in self.queue_history.keys():
+                batch_end_events = self.check_task_queue(mid, current_time)
                 events += batch_end_events
         else:
-            # try launching tasks round robin until task types have been exhausted
-            all_task_types = get_task_types(self.simulation.job_types_list)
-            task_types_left = len(all_task_types)
+            # try launching tasks round robin until models have been exhausted
+            all_mids = self.queue_history.keys()
+            mids_left = len(all_mids)
             batch_end_events = []
-            while not batch_end_events and task_types_left:
-                if all_task_types[self.next_task_type_idx] in self.queue_history:
-                    batch_end_events = self.check_task_queue(all_task_types[self.next_task_type_idx], current_time)
+            while not batch_end_events and mids_left:
+                if all_mids[self.next_task_type_idx] in self.queue_history:
+                    batch_end_events = self.check_task_queue(all_mids[self.next_task_type_idx], current_time)
                     events += batch_end_events
-                self.next_task_type_idx = (self.next_task_type_idx + 1) % len(all_task_types)
-                task_types_left -= 1
+                self.next_task_type_idx = (self.next_task_type_idx + 1) % len(all_mids)
+                mids_left -= 1
         return events
 
     #  --------------------------- DECENTRALIZED WORKER SCHEDULING  ----------------------
     
-    def check_task_queue(self, task_type, current_time):
-        if USE_BOOST:
-            task_queue = sorted(
-                self.get_queue_history(current_time, task_type, info_staleness=0),
-                key=lambda t: get_task_boost(t))
-        else:
-            task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
+    def check_task_queue(self, model_id, current_time):
+        task_queue = self.get_queue_history(current_time, model_id, info_staleness=0)
         
         for task in task_queue:
             # skip dropped tasks
@@ -112,7 +106,7 @@ class HashTaskWorker(TaskWorker):
                 continue
         
         # get queue after drops
-        task_queue = [task for task in self.get_queue_history(current_time, task_type, info_staleness=0)
+        task_queue = [task for task in self.get_queue_history(current_time, model_id, info_staleness=0)
                       if current_time >= task.log.task_placed_on_worker_queue_timestamp]
         
         assert((self.simulation.task_drop_log["job_id"]!=task.job_id).all() for task in task_queue)
@@ -140,40 +134,46 @@ class HashTaskWorker(TaskWorker):
         """
         events = []
 
-        ready_tasks = []
+        # TODO: diff emit sizes for diff workflows?
+        emit_size = batch.tasks[0].max_emit_batch_size
+
+        # model_id -> list[Task]
+        ready_tasks_by_model = {}
         for task in batch.tasks:
-            ready_tasks += task.job.newly_available_tasks(task)
-
-        if len(ready_tasks) == 0:
-            return []
+            next_tasks = task.job.newly_available_tasks(task)
+            for next_task in next_tasks:
+                if next_task.model.model_id not in ready_tasks_by_model:
+                    ready_tasks_by_model[next_task.model.model_id] = []
+                ready_tasks_by_model[next_task.model.model_id].append(next_task)
         
-        prev_curr = current_time
-        for i in range(0, len(ready_tasks), 4):
-            curr_send_batch = ready_tasks[i:(i+4)]
+        for mid, ready_tasks in ready_tasks_by_model.items():
+            prev_curr = current_time
+            for i in range(0, len(ready_tasks), emit_size):
+                curr_send_batch = ready_tasks[i:(i+emit_size)]
 
-            transfer_delay = 0
-            if ENABLE_DYNAMIC_MODEL_LOADING:
-                if ALLOCATION_STRATEGY == "HERD":
-                    # don't choose worker that is not in the correct group
-                    while curr_send_batch[0].model and curr_send_batch[0].model.model_id not in self.simulation.herd_assignment.group_models[self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].group_id] and \
-                        self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
-                        self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
+                transfer_delay = 0
+                if ENABLE_DYNAMIC_MODEL_LOADING:
+                    if ALLOCATION_STRATEGY == "HERD":
+                        # don't choose worker that is not in the correct group
+                        while curr_send_batch[0].model and curr_send_batch[0].model.model_id not in self.simulation.herd_assignment.group_models[self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].group_id] and \
+                            self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
+                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
+                    else:
+                        while curr_send_batch[0].model and self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
+                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
                 else:
-                    while curr_send_batch[0].model and self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
+                    while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
                         self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-            else:
-                while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
-                    self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-            
-            if self.next_worker_id[curr_send_batch[0].model.model_id] != self.worker_id:  # The next worker on the pipeline is NOT the same node
-                transfer_delay = CPU_to_CPU_delay(task.result_size * len(curr_send_batch))
+                
+                if self.next_worker_id[curr_send_batch[0].model.model_id] != self.worker_id:  # The next worker on the pipeline is NOT the same node
+                    transfer_delay = CPU_to_CPU_delay(task.result_size * len(curr_send_batch))
 
-            events.append(EventOrders(prev_curr + transfer_delay, TasksArrival(
-                self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]], curr_send_batch)))
-            
-            prev_curr = prev_curr + transfer_delay
+                events.append(EventOrders(prev_curr + transfer_delay, TasksArrival(
+                    self.simulation, self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]], curr_send_batch)))
+                
+                prev_curr = prev_curr + transfer_delay
 
-            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
+                self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
        
         return events
 
@@ -199,30 +199,30 @@ class HashTaskWorker(TaskWorker):
         for element in prev_arrived_list:
             receive_time = max(receive_time, element[1])
         events.append(EventOrders(
-            receive_time, TaskArrival(self, cur_task, cur_task.job_id)))
+            receive_time, TaskArrival(self.simulation, self, cur_task, cur_task.job_id)))
         return events
     
     # ------------------------- queue history update helper functions ---------------
 
     def add_task_to_queue_history(self, task, current_time):
         # 0. Base case (first entry)
-        if task.task_type not in self.queue_history:
-            self.queue_history[task.task_type] = [(current_time, [task])]
+        if task.model.model_id not in self.queue_history:
+            self.queue_history[task.model.model_id] = [(current_time, [task])]
             return
 
         # 1. Find the time_stamp place to add this queue information
-        last_index = len(self.queue_history[task.task_type]) - 1
+        last_index = len(self.queue_history[task.model.model_id]) - 1
         while last_index >= 0:
-            if self.queue_history[task.task_type][last_index][0] == current_time:
-                if task not in self.queue_history[task.task_type][last_index][1]:
-                    self.queue_history[task.task_type][last_index][1].append(task)
+            if self.queue_history[task.model.model_id][last_index][0] == current_time:
+                if task not in self.queue_history[task.model.model_id][last_index][1]:
+                    self.queue_history[task.model.model_id][last_index][1].append(task)
                 break
-            if self.queue_history[task.task_type][last_index][0] < current_time:
-                if task not in self.queue_history[task.task_type][last_index][1]:
-                    next_queue = self.queue_history[task.task_type][last_index][1].copy()
+            if self.queue_history[task.model.model_id][last_index][0] < current_time:
+                if task not in self.queue_history[task.model.model_id][last_index][1]:
+                    next_queue = self.queue_history[task.model.model_id][last_index][1].copy()
                     next_queue.append(task)
                     last_index += 1
-                    self.queue_history[task.task_type].insert(
+                    self.queue_history[task.model.model_id].insert(
                         last_index, (current_time, next_queue)
                     )
                 break
@@ -230,40 +230,40 @@ class HashTaskWorker(TaskWorker):
             last_index -= 1
 
         # 2. added the task to all the subsequent timestamp tuples
-        while last_index < len(self.queue_history[task.task_type]):
-            if task not in self.queue_history[task.task_type][last_index][1]:
-                self.queue_history[task.task_type][last_index][1].append(task)
+        while last_index < len(self.queue_history[task.model.model_id]):
+            if task not in self.queue_history[task.model.model_id][last_index][1]:
+                self.queue_history[task.model.model_id][last_index][1].append(task)
             last_index += 1
 
     def rm_task_in_queue_history(self, task, current_time):
         # 0. base case: shouldn't happen
-        if task.task_type not in self.queue_history:
+        if task.model.model_id not in self.queue_history:
             AssertionError("rm model cached location to an empty list")
             return
 
-        last_index = len(self.queue_history[task.task_type]) - 1
+        last_index = len(self.queue_history[task.model.model_id]) - 1
         
         # 1. find the place to add this remove_event to the tuple list
         while last_index >= 0:
-            if self.queue_history[task.task_type][last_index][0] == current_time:
-                if task in self.queue_history[task.task_type][last_index][1]:
-                    self.queue_history[task.task_type][last_index][1].remove(task)
+            if self.queue_history[task.model.model_id][last_index][0] == current_time:
+                if task in self.queue_history[task.model.model_id][last_index][1]:
+                    self.queue_history[task.model.model_id][last_index][1].remove(task)
                 break
-            if self.queue_history[task.task_type][last_index][0] < current_time:
-                if task in self.queue_history[task.task_type][last_index][1]:
-                    next_tasks_in_queue = self.queue_history[task.task_type][last_index][1].copy()
+            if self.queue_history[task.model.model_id][last_index][0] < current_time:
+                if task in self.queue_history[task.model.model_id][last_index][1]:
+                    next_tasks_in_queue = self.queue_history[task.model.model_id][last_index][1].copy()
                     next_tasks_in_queue.remove(task)
                     last_index = last_index + 1
-                    self.queue_history[task.task_type].insert(
+                    self.queue_history[task.model.model_id].insert(
                         last_index, (current_time, next_tasks_in_queue)
                     )
                 break
             last_index -= 1  # go to prev time
         # 2. remove the task from all the subsequent tuple
-        while last_index < len(self.queue_history[task.task_type]):
-            if task in self.queue_history[task.task_type][last_index]:
-                self.queue_history[task.task_type][last_index][1].remove(task)
+        while last_index < len(self.queue_history[task.model.model_id]):
+            if task in self.queue_history[task.model.model_id][last_index]:
+                self.queue_history[task.model.model_id][last_index][1].remove(task)
             last_index += 1  # do this for the remaining element after
 
-    def get_queue_history(self, current_time, task_type, info_staleness=0) -> list:
-        return self.get_history(self.queue_history[task_type], current_time, info_staleness)
+    def get_queue_history(self, current_time, model_id, info_staleness=0) -> list:
+        return self.get_history(self.queue_history[model_id], current_time, info_staleness)
