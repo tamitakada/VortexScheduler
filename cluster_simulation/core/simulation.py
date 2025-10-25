@@ -61,14 +61,65 @@ class Simulation(object):
         self.result_to_export = pd.DataFrame()
         self.tasks_logging_times = pd.DataFrame()
         self.event_log = pd.DataFrame(columns=["time", "worker_id", "event"])
-        self.batch_exec_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "workflow_id", 
-                                                    "task_id", "batch_size", "job_ids"])
+        self.batch_exec_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "model_id", "batch_size", "job_ids"])
         self.task_drop_log = pd.DataFrame(columns=["client_id", "job_id", "workflow_id", "task_id", "drop_time", "create_time",
                                                    "arrival_time", "slo", "deadline"])
+        
+        # TODO: client ID to worker mets
+        self.task_exec_log = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "task_id", "worker_id", 
+                                                   "worker_arrival_time", "exec_start_time", "exec_end_time"])
+        self.task_arrival_log = pd.DataFrame(columns=["time", "client_id", "workflow_id", "job_id", "task_id", "worker_id"])
+        self.worker_metrics_log = pd.DataFrame(columns=["time", "sampled_interval_ms", "worker_id", "workflow_id",
+                                                        "task_id", "task_arrival_rate", "task_throughput"])
+
         self.allocation_logs = []
 
         print("---- SIMULATION : " + self.simulation_name + "----")
         self.produce_breakdown =  produce_breakdown
+
+    def add_task_arrival_to_worker_metrics(self, time: float, task: Task, worker: Worker):
+        """
+        Update task arrival metrics by logging newly arrived [task] at [worker].
+        """
+        if ((self.task_arrival_log["job_id"]==task.job_id) & (self.task_arrival_log["task_id"]==task.task_id)).any():
+            print(f"[Simulation] Already logged Job {task.job_id}, Task {task.task_id} arrival")
+            return
+        
+        self.task_arrival_log.loc[len(self.task_arrival_log)] = \
+            [time, task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, worker.worker_id]
+        
+    def add_task_exec_to_worker_metrics(self, task: Task, worker: Worker):
+        """
+        Update task exec metrics by logging newly arrived [task] at [worker].
+        """
+        if ((self.task_exec_log["job_id"]==task.job_id) & (self.task_exec_log["task_id"]==task.task_id)).any():
+            print(f"[Simulation] Already logged Job {task.job_id}, Task {task.task_id} exec")
+            return
+        
+        self.task_exec_log.loc[len(self.task_exec_log)] = \
+            [task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, worker.worker_id,
+             task.log.task_placed_on_worker_queue_timestamp, task.log.task_execution_start_timestamp, task.log.task_execution_end_timestamp]
+        
+    def add_worker_metrics_sample(self, time: float, interval: float):
+        """
+        Log a new sample of worker metrics over the past [interval] ms.
+        """
+        for worker in self.workers:
+            exec_log = self.task_exec_log[(self.task_exec_log["worker_id"]==worker.worker_id) & (self.task_exec_log["exec_end_time"] <= time) & (self.task_exec_log["exec_end_time"] > time-interval)]
+            arrival_log = self.task_arrival_log[(self.task_arrival_log["worker_id"]==worker.worker_id) & (self.task_arrival_log["time"] <= time) & (self.task_arrival_log["time"] > time-interval)]
+            arrived_workflows = set(arrival_log["workflow_id"])
+
+            for wf in arrived_workflows:
+                wf_arrival_log = arrival_log[arrival_log["workflow_id"]==wf]
+                arrived_tasks = set(wf_arrival_log["task_id"])
+
+                for task in arrived_tasks:
+                    worker_task_arrival_log = wf_arrival_log[wf_arrival_log["task_id"]==task]
+                    arrival_rate = len(worker_task_arrival_log) / interval * 1000
+                    throughput = ((exec_log["workflow_id"]==wf) & (exec_log["task_id"]==task)).sum() / interval * 1000
+                    self.worker_metrics_log.loc[len(self.worker_metrics_log)] = \
+                        [time, interval, worker.worker_id, wf, task, arrival_rate, throughput]
+
 
     def get_model_from_id(self, model_id: int) -> Model:
         all_models = [m for ms in list(self.metadata_service.job_type_models.values()) for m in ms]

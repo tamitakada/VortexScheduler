@@ -33,7 +33,7 @@ class HeftScheduler(Scheduler):
             task_arrival_time = current_time + CPU_to_CPU_delay(initial_task.input_size)
             worker_index = activation_graph[initial_task.task_id]
             task_arrival_events.append(EventOrders(
-                task_arrival_time, TaskArrival(self.simulation.workers[worker_index], initial_task, job.id)))
+                task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], initial_task, job.id)))
         return task_arrival_events
     
     def schedule_tasks_on_arrival(self, tasks, current_time):

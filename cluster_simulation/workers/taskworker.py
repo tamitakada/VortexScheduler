@@ -19,7 +19,7 @@ class TaskWorker(Worker):
         """
         raise NotImplementedError()
 
-    def free_slot(self, current_time, batch: Batch, task_type):
+    def free_slot(self, current_time, batch: Batch):
         """ Attempts to launch another task. """
         assert(not self.did_abandon_batch(batch.id))
 
@@ -32,12 +32,13 @@ class TaskWorker(Worker):
                 task.job_id, task.task_id, current_time)
             task.log.task_execution_end_timestamp = current_time
 
+            self.simulation.add_task_exec_to_worker_metrics(task, self)
+
         self.simulation.batch_exec_log.loc[len(self.simulation.batch_exec_log)] = {
             "start_time": batch.tasks[0].log.task_execution_start_timestamp,
             "end_time": current_time,
             "worker_id": self.worker_id,
-            "workflow_id": batch.tasks[0].task_type[0],
-            "task_id": batch.tasks[0].task_id,
+            "model_id": batch.model.model_id,
             "batch_size": batch.size(),
             "job_ids": batch.job_ids
         }
