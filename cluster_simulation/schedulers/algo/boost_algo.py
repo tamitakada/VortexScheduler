@@ -8,6 +8,7 @@ from core.job import Job
 class BoostPolicy:
     TOTAL_JOB_TIME = 0
     REMAINING_JOB_TIME = 1
+    REMAINING_TIME_TO_DEADLINE = 2
 
 
 def _get_processing_time(job: Job, complete_task_ids: set[int]) -> float:
@@ -40,20 +41,25 @@ def _get_processing_time(job: Job, complete_task_ids: set[int]) -> float:
     return max_cum_processing_time
 
 
-def get_job_boost_size(job: Job, boost_policy: int) -> float:
+def get_job_boost_size(time: float, job: Job, boost_policy: int) -> float:
     """
     Compute a boost for the job based on the [boost_policy].
     """
-    assert(boost_policy in [BoostPolicy.TOTAL_JOB_TIME, BoostPolicy.REMAINING_JOB_TIME])
+    assert(boost_policy in [BoostPolicy.TOTAL_JOB_TIME, 
+                            BoostPolicy.REMAINING_JOB_TIME,
+                            BoostPolicy.REMAINING_TIME_TO_DEADLINE])
 
     if boost_policy == BoostPolicy.TOTAL_JOB_TIME:
         return _get_processing_time(job, set())
     elif boost_policy == BoostPolicy.REMAINING_JOB_TIME:
         return _get_processing_time(job, set(job.completed_tasks))
+    elif boost_policy == BoostPolicy.REMAINING_TIME_TO_DEADLINE:
+        assert(SLO_GRANULARITY == "JOB")
+        return (job.create_time + (1 + SLO_SLACK) * job.slo) - time
 
 
-def get_task_priority_by_boost(task: Task, boost_policy: int, boost_parameter=BOOST_PARAMETER) -> float:
-    boost_size = get_job_boost_size(task.job, boost_policy)
+def get_task_priority_by_boost(time, task: Task, boost_policy: int, boost_parameter=BOOST_PARAMETER) -> float:
+    boost_size = get_job_boost_size(time, task.job, boost_policy)
     # print(f"Task {task}, boost {boost_size}")
     
     return task.job.create_time - 1 / boost_parameter * np.log(

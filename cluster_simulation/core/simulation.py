@@ -68,7 +68,7 @@ class Simulation(object):
         # TODO: client ID to worker mets
         self.task_exec_log = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "task_id", "worker_id", 
                                                    "worker_arrival_time", "exec_start_time", "exec_end_time"])
-        self.task_arrival_log = pd.DataFrame(columns=["time", "client_id", "workflow_id", "job_id", "task_id", "worker_id"])
+        self.task_arrival_log = pd.DataFrame(columns=["time", "client_id", "workflow_id", "job_id", "task_id", "model_id", "worker_id"])
         self.worker_metrics_log = pd.DataFrame(columns=["time", "sampled_interval_ms", "worker_id", "workflow_id",
                                                         "task_id", "task_arrival_rate", "task_throughput"])
 
@@ -86,7 +86,7 @@ class Simulation(object):
             return
         
         self.task_arrival_log.loc[len(self.task_arrival_log)] = \
-            [time, task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, worker.worker_id]
+            [time, task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, task.model.model_id, worker.worker_id]
         
     def add_task_exec_to_worker_metrics(self, task: Task, worker: Worker):
         """
