@@ -25,7 +25,7 @@ class HashTaskScheduler(Scheduler):
             task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
-                task_arrival_time, TaskArrival(self.simulation.workers[worker_index], task, task.job.id)))
+                task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))
 
         return task_arrival_events
 
@@ -38,7 +38,7 @@ class HashTaskScheduler(Scheduler):
             task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
-                task_arrival_time, TaskArrival(self.simulation.workers[worker_index], task, task.job.id)))
+                task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))
 
         return task_arrival_events
     

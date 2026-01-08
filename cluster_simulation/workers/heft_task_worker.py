@@ -11,7 +11,6 @@ from core.events.worker_events import *
 from core.batch import Batch
 
 from schedulers.centralized.heft_scheduler import HeftScheduler
-from schedulers.algo.boost_algo import get_task_boost
 
 
 class HeftTaskWorker(TaskWorker):
@@ -147,7 +146,7 @@ class HeftTaskWorker(TaskWorker):
                 task_arrival_time = current_time + \
                     CPU_to_CPU_delay(initial_task.input_size)
             task_arrival_events.append(EventOrders(
-                task_arrival_time, TaskArrival(self.simulation.workers[worker_index], initial_task, job.id)))
+                task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], initial_task, job.id)))
         
         return task_arrival_events
     
@@ -198,12 +197,7 @@ class HeftTaskWorker(TaskWorker):
         return tasks
     
     def check_task_queue(self, task_type, current_time):
-        if USE_BOOST:
-            task_queue = sorted(
-                self.get_queue_history(current_time, task_type, info_staleness=0),
-                key=lambda t: get_task_boost(t))
-        else:
-            task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
+        task_queue = self.get_queue_history(current_time, task_type, info_staleness=0)
         
         for task in task_queue:
             # skip dropped tasks
@@ -291,7 +285,7 @@ class HeftTaskWorker(TaskWorker):
                     transfer_delay = CPU_to_CPU_delay(task.result_size * len(curr_send_batch))
 
                 events.append(EventOrders(prev_curr + transfer_delay, TasksArrival(
-                    self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]], curr_send_batch)))
+                    self.simulation, self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]], curr_send_batch)))
                 
                 prev_curr = prev_curr + transfer_delay
 
@@ -338,7 +332,7 @@ class HeftTaskWorker(TaskWorker):
         for element in prev_arrived_list:
             receive_time = max(receive_time, element[1])
         events.append(EventOrders(
-            receive_time, TaskArrival(self, cur_task, cur_task.job_id)))
+            receive_time, TaskArrival(self.simulation, self, cur_task, cur_task.job_id)))
         return events
     
     # ------------------------- queue history update helper functions ---------------

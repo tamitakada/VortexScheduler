@@ -9,6 +9,7 @@ class Batch:
     """
     def __init__(self, tasks: list[Task]):
         assert(len(tasks) > 0)
+        assert(len(set(t.job_id for t in tasks)) == len(tasks))
 
         self.id = uuid.uuid4()
         self.tasks = tasks

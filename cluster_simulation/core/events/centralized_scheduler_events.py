@@ -208,3 +208,27 @@ class RerunHerdScheduler(Event):
     
     def is_worker_event():
         return False
+
+
+class SampleWorkerMetrics(Event):
+    """
+        Event signifying that the simulator should sample and log worker metrics.
+    """
+
+    def __init__(self, simulation, interval=500):
+        self.simulation = simulation
+        self.interval = interval
+
+    def run(self, current_time):
+        self.simulation.add_worker_metrics_sample(current_time, self.interval)
+
+        if self.simulation.event_queue.qsize() > 0:
+            return [EventOrders(current_time + self.interval, SampleWorkerMetrics(self.simulation, self.interval))]
+
+        return []
+    
+    def to_string(self):
+        return "[Sample Worker Metrics]"
+    
+    def is_worker_event():
+        return False

@@ -50,6 +50,8 @@ class Simulation_central(Simulation):
     def run(self):
         self.generate_all_jobs()
 
+        self.event_queue.put(EventOrders(500, SampleWorkerMetrics(self)))
+
         last_time = 0
         while self.event_queue.qsize() > 0:
             cur_event = self.event_queue.get()

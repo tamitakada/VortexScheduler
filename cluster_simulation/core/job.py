@@ -41,7 +41,7 @@ class Job(object):
     def __str__(self):
         return "JobID: {}".format(self.id)
 
-    def get_min_remaining_processing_time(self, init_proc_times={}) -> float:
+    def get_min_remaining_processing_time(self, init_proc_times={}, batch_sizes={}) -> float:
         """
             Returns the minimum remaining time to finish the job
             without batching, given [init_proc_times: task_id -> time] where
@@ -55,7 +55,8 @@ class Job(object):
             if target_task.task_id in proc_times:
                 return proc_times[target_task.task_id]
             else:
-                proc_time = target_task.model.batch_exec_times[24][0]
+                bsize = batch_sizes[target_task.task_id] if target_task.task_id in batch_sizes else 1
+                proc_time = target_task.model.batch_exec_times[24][target_task.model.batch_sizes.index(bsize)]
                 if target_task.required_task_ids:
                     proc_time += max(_get_min_proc_time([t for t in self.tasks if t.task_id == tid][0], proc_times) 
                                     for tid in target_task.required_task_ids)

@@ -26,6 +26,11 @@ class JobArrivalAtWorker(Event):
         if self.simulation.job_split == "PER_TASK":
             new_events = self.simulation.workers[self.worker_id].schedule_job_heft(
                 current_time, self.job)
+            
+            for task in self.job.tasks:
+                if len(task.required_task_ids) == 0:
+                    self.simulation.add_task_arrival_to_worker_metrics(
+                        current_time, task, self.worker)
         # elif self.simulation.job_split == "PER_JOB":
         #     new_events = self.simulation.schedule_job_and_send_job(
         #         self.job, current_time)
@@ -42,7 +47,8 @@ class JobArrivalAtWorker(Event):
 class TaskArrival(Event):
     """ Event to signify a TASK arriving at a WORKER. """
 
-    def __init__(self, worker, task, job_id):
+    def __init__(self, simulation, worker, task, job_id):
+        self.simulation = simulation
         self.worker = worker
         self.task = task
         self.job_id = job_id
@@ -50,6 +56,7 @@ class TaskArrival(Event):
     def run(self, current_time):
         # log tracking for this task
         self.task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+        self.simulation.add_task_arrival_to_worker_metrics(current_time, self.task, self.worker)
         return self.worker.add_tasks(current_time, [self.task])
 
     def to_string(self):
@@ -63,7 +70,8 @@ class TaskArrival(Event):
 class TasksArrival(Event):
     """ Event to signify TASKs arriving at a WORKER. """
 
-    def __init__(self, worker, tasks):
+    def __init__(self, simulation, worker, tasks):
+        self.simulation = simulation
         self.worker = worker
         self.tasks = tasks
 
@@ -73,6 +81,7 @@ class TasksArrival(Event):
         relevant_tasks = [t for t in self.tasks if not (drop_log[current_time >= drop_log["drop_time"]]["job_id"] == t.job_id).any()]
         for task in relevant_tasks:
             task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+            self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
         return self.worker.add_tasks(current_time, self.tasks)
 
     def to_string(self):
@@ -124,6 +133,7 @@ class BatchArrivalAtWorker(Event):
                                                        current_worker_batch=(current_batches[0] if current_batches else None)))]
         for task in self.batch.tasks:
             task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+            self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
         return self.worker.maybe_start_batch(self.batch, current_time)
 
     def to_string(self):
@@ -181,9 +191,8 @@ class BatchPreemptionScheduledAtWorker(Event):
 
             for task in self.batch.tasks:
                 task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-            
-            for task in self.batch.tasks:
-                task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+                self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
+
             return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time)
         else:
             # NOTE: marks as abandoned anyway in case prior assigned batch has not yet arrived
@@ -237,7 +246,7 @@ class BatchEndEvent(Event):
     def run(self, current_time):
         if self.worker.did_abandon_batch(self.batch.id):
             return []
-        return self.worker.free_slot(current_time, self.batch, self.task_type)
+        return self.worker.free_slot(current_time, self.batch)
 
     def should_abandon_event(self, current_time, kwargs: dict):
         return self.worker.did_abandon_batch(self.batch.id)
