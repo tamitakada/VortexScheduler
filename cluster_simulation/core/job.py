@@ -1,31 +1,36 @@
 from core.configs.workflow_config import *
 from core.model import *
 from core.task import *
-from core.configs.gen_config import *
-from core.configs.model_config import *
-
+from core.workflow import Workflow
 
 class Job(object):
 
-    def __init__(self, create_time, job_type_id, job_id, client_id, slo):
+    def __init__(self, simulation, create_time: float, workflow: Workflow, job_id: int, client_id: int, slo: float):
         """
         A job is a unique object across the simulation execution that has a specific graph of task dependencies (job_type_id)
         """
 
+        self.simulation = simulation
+
         self.client_id = client_id
-        self.id = job_id  # unique ID for each job
-        self.job_type_id = job_type_id
-        self.job_name, self.tasks = None, []  # List of Task objects
+        self.id = job_id    
+        self.job_type_id = workflow.id
+
+        self.workflow = workflow
+
         self.tasks = []
-        # TODO: this is called everytime now. OPTIMIZE BY CALLING IT ONLY ONCE
-        self.job_generate_from_workflow()
+        for _, at in sorted(self.workflow.tasks.items(), key=lambda item: item[0]):
+            self.tasks.append(at.create_task(self))
+        
         self.ADFG = {}     # Activated Dataflow Graph scheduled by scheduler. map: task_id->worker_id
         # List containing which tasks tha constitute the job have been completed : [(task,timestamp),...]
         self.completed_tasks = []
+        
         self.create_time = create_time  
         self.end_time = create_time
-        self.slo = slo
 
+        self.slo = slo
+        self.job_deadline = self.create_time + self.slo
 
     def __hash__(self):
         return hash(self.id)
@@ -93,49 +98,6 @@ class Job(object):
         self.end_time = max(completion_time, self.end_time)
         assert len(self.completed_tasks) <= len(self.tasks)
         return len(self.completed_tasks) == len(self.tasks)
-
-    def job_generate_from_workflow(self):
-        """
-        Access WORKFLOW_LIST in workflow.py and fill up the self members based on the job_type_id
-        """
-        job_cfg = WORKFLOW_LIST[self.job_type_id]
-        self.job_name = job_cfg["JOB_NAME"]
-
-        models = []
-        for i, model_config in enumerate(MODELS):
-            models.append(Model(
-                model_id=i, 
-                model_size=model_config["MODEL_SIZE"],
-                batch_sizes=model_config["BATCH_SIZES"],
-                batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
-                exec_time_cv=model_config["EXEC_TIME_CV"]))
-        
-        for task_cfg in job_cfg["TASKS"]:
-            required_model_for_task = None
-            if task_cfg["MODEL_ID"] > -1:
-                required_model_for_task = models[task_cfg["MODEL_ID"]]
-
-            current_task = Task(self,
-                                self.id,  # ID of the associated unique Job
-                                task_cfg["TASK_INDEX"],  # taskID
-                                (self.job_type_id, task_cfg["TASK_INDEX"]), # task type
-                                0, 
-                                required_model_for_task, 
-                                task_cfg["INPUT_SIZE"],
-                                task_cfg["OUTPUT_SIZE"],
-                                required_model_for_task.batch_sizes[-1] if required_model_for_task else 1, # TODO: max batch size for no model tasks?
-                                task_cfg["MAX_WAIT_TIME"],
-                                task_cfg["SLO"] if SLO_GRANULARITY == "TASK" else 0,
-                                task_cfg["MAX_EMIT_BATCH_SIZE"])
-
-            self.tasks.append(current_task)
-
-        # Assign dependencies among Tasks
-        for current_task_index in range(len(job_cfg["TASKS"])):
-            for prev_idx in job_cfg["TASKS"][current_task_index]["PREV_TASK_INDEX"]:
-                self.tasks[current_task_index].required_task_ids.append(prev_idx)
-            for next_idx in job_cfg["TASKS"][current_task_index]["NEXT_TASK_INDEX"]:
-                self.tasks[current_task_index].next_task_ids.append(next_idx)
 
     def finished_task(self, task: Task) -> bool:
         for f_task in self.completed_tasks:

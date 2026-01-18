@@ -1,5 +1,5 @@
 from core.simulation import *
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 
 from workers.taskworker import *
 
@@ -47,7 +47,16 @@ class Simulation_central(Simulation):
         if job_is_completed:
             self.remaining_jobs -= 1
 
-    def run(self):
+    def run(self, infline=None):
+        # print("CONFIGS: =====================")
+        # print(gcfg.CLIENT_CONFIGS)
+        # print()
+        # print(gcfg.CUSTOM_ALLOCATION)
+        # print()
+        # print([(m["MAX_BATCH_SIZE"]) for m in mcfg.MODELS])
+        # print()
+        
+        self.generate_workflows()
         self.generate_all_jobs()
 
         self.event_queue.put(EventOrders(500, SampleWorkerMetrics(self)))
@@ -69,6 +78,7 @@ class Simulation_central(Simulation):
 
             assert cur_event.current_time >= last_time
             last_time = cur_event.current_time
+
             new_events = cur_event.event.run(cur_event.current_time)
             for new_event in new_events:
                 last_time = cur_event.current_time

@@ -1,6 +1,6 @@
 import numpy as np
 
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 from core.task import Task
 from core.job import Job
 
@@ -54,11 +54,11 @@ def get_job_boost_size(time: float, job: Job, boost_policy: int) -> float:
     elif boost_policy == BoostPolicy.REMAINING_JOB_TIME:
         return _get_processing_time(job, set(job.completed_tasks))
     elif boost_policy == BoostPolicy.REMAINING_TIME_TO_DEADLINE:
-        assert(SLO_GRANULARITY == "JOB")
-        return (job.create_time + (1 + SLO_SLACK) * job.slo) - time
+        assert(gcfg.SLO_GRANULARITY == "JOB")
+        return (job.create_time + (1 + gcfg.SLO_SLACK) * job.slo) - time
 
 
-def get_task_priority_by_boost(time, task: Task, boost_policy: int, boost_parameter=BOOST_PARAMETER) -> float:
+def get_task_priority_by_boost(time, task: Task, boost_policy: int, boost_parameter=gcfg.BOOST_PARAMETER) -> float:
     boost_size = get_job_boost_size(time, task.job, boost_policy)
     # print(f"Task {task}, boost {boost_size}")
     

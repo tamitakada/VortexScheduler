@@ -1,8 +1,6 @@
 import copy
 
-from core.configs.gen_config import *
 from core.model import Model
-from core.task import Task
 from core.batch import Batch
 
 

@@ -1,6 +1,4 @@
 from core.simulation import *
-from core.configs.gen_config import *
-
 from workers.taskworker import *
 
 

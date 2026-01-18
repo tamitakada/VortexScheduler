@@ -1,7 +1,7 @@
 from random import randint
 from core.configs.workflow_config import *
-from core.configs.gen_config import *
-from core.configs.model_config import *
+import core.configs.gen_config as gcfg
+import core.configs.model_config as mcfg
 
 import scipy
 
@@ -26,18 +26,22 @@ class Model:
         self.batch_exec_times = {}
 
         for size, exec_times in batch_exec_times.items():
-            # missing or excess exec time data
-            assert(len(batch_sizes) == len(exec_times))
-
+            # missing exec time data
+            assert(len(batch_sizes) <= len(exec_times))
+            
             self.batch_exec_times[size] = []
 
             if len(batch_sizes) > 1:
-                m, b, _, _, _ = scipy.stats.linregress(batch_sizes, exec_times)
+                m, b, _, _, _ = scipy.stats.linregress(
+                    batch_sizes, 
+                    exec_times[:len(batch_sizes)])
             else:
                 m = exec_times[0]
                 b = 0
             
             # missing exec times are filled with above regression
+            # TODO: mixing regression & provided data can lead to
+            # larger batch having lower exec time
             for bsize in range(1, self.max_batch_size+1, 1):
                 if bsize in batch_sizes:
                     self.batch_exec_times[size].append(exec_times[batch_sizes.index(bsize)])
@@ -85,7 +89,7 @@ def parse_models_from_workflows() -> dict:
     Returns: {job_type_id1:[model1, model2 ...], job_type_id2:[]} a dict of model for different jobs
     """
     models = []
-    for i, model_config in enumerate(MODELS):
+    for i, model_config in enumerate(mcfg.MODELS):
         models.append(Model(
             model_id=i, 
             model_size=model_config["MODEL_SIZE"],

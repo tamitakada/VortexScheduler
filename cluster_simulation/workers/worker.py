@@ -1,7 +1,4 @@
-from core.configs.gen_config import *
 from core.network import *
-from core.configs.gen_config import *
-
 from workers.gpu_state import *
 
 import pandas as pd

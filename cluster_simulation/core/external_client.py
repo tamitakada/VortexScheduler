@@ -1,7 +1,7 @@
 from core.job import *
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 from core.network import *
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 
 import numpy as np
 
@@ -21,15 +21,17 @@ class ExternalClient(object):
 
         job_create_delay = 1 / send_rate * 1000
 
-        if WORKLOAD_DISTRIBUTION == "POISSON":
+        if gcfg.WORKLOAD_DISTRIBUTION == "POISSON":
             job_create_delay = np.random.poisson(lam=(1 / send_rate * 1000))
-        elif WORKLOAD_DISTRIBUTION == "GAMMA":
-            shape = (1 / send_rate * 1000)**2 / GAMMA_CV**2
-            scale = GAMMA_CV**2 / (1 / send_rate * 1000)
+        elif gcfg.WORKLOAD_DISTRIBUTION == "GAMMA":
+            shape = (1 / send_rate * 1000)**2 / gcfg.GAMMA_CV**2
+            scale = gcfg.GAMMA_CV**2 / (1 / send_rate * 1000)
             job_create_delay = np.random.gamma(shape, scale)
         
-        job = Job(create_time=current_time + job_create_delay,
-                  job_type_id=job_type, job_id=job_id, client_id=self.id,
+        job = Job(simulation=self.simulation,
+                  create_time=current_time + job_create_delay,
+                  workflow=self.simulation.workflows[job_type],
+                  job_id=job_id, client_id=self.id,
                   slo=self.per_job_config[job_type]["SLO"] if "SLO" in self.per_job_config[job_type] else np.inf)
         job = self.log_job_creation_time(job, current_time + job_create_delay)
         return job

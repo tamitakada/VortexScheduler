@@ -1,5 +1,4 @@
 from core.logging import *
-from core.configs.gen_config import *
 
 import numpy as np
 
