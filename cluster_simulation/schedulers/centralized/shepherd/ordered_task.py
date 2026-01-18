@@ -1,5 +1,5 @@
 from core.task import Task
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 
 
 class OrderedTask:
@@ -11,10 +11,10 @@ class OrderedTask:
         self.task = task
         self.task_arrival_time = current_time
 
-        if SLO_GRANULARITY == "TASK":
-            self.deadline = task.job.create_time + task.slo * (1 + SLO_SLACK)
+        if gcfg.SLO_GRANULARITY == "TASK":
+            self.deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
         else:
-            self.deadline = task.job.create_time + task.job.slo * (1 + SLO_SLACK)
+            self.deadline = task.job.create_time + task.job.slo * (1 + gcfg.SLO_SLACK)
 
     def __lt__(self, other):
         return self.deadline < other.deadline

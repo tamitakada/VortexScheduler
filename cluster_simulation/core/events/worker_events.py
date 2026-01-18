@@ -1,6 +1,6 @@
 from core.job import *
 from core.network import *
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 
 from workers.worker import Worker
 
@@ -123,8 +123,8 @@ class BatchArrivalAtWorker(Event):
     def run(self, current_time):
         self.batch.tasks = [task for task in self.batch.tasks 
                             if not (self.simulation.task_drop_log["job_id"] == task.job_id).any()]
-        if (not ENABLE_DYNAMIC_MODEL_LOADING and not self.worker.GPU_state.does_have_idle_copy(self.batch.model, current_time)) or \
-            (not ENABLE_MULTITHREADING and any(s.reserved_batch for s in self.worker.GPU_state.state_at(current_time))) or \
+        if (not self.worker.GPU_state.does_have_idle_copy(self.batch.model, current_time)) or \
+            (not gcfg.ENABLE_MULTITHREADING and any(s.reserved_batch for s in self.worker.GPU_state.state_at(current_time))) or \
                 self.worker.did_abandon_batch(self.batch.id) or self.batch.size() == 0:
             current_batches = [s.reserved_batch for s in self.worker.GPU_state.state_at(current_time) if s.reserved_batch]
             transfer_delay = CPU_to_CPU_delay(self.batch.size()*self.batch.tasks[0].input_size) if self.batch.size() > 0 else 0

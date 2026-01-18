@@ -1,7 +1,7 @@
 from core.job import *
 from core.task import *
 from core.network import *
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
@@ -21,6 +21,8 @@ class HeftScheduler(Scheduler):
         super().__init__(simulation, herd_assignment)
 
     def schedule_job_on_arrival(self, job, current_time):
+        super().schedule_job_on_arrival(job, current_time)
+
         task_arrival_events = [] # List to store the TaskArrivalEvent to the receiving Workers
 
         # 1. compute scheduling decisions : {task_id0->worker_id0, ...}
@@ -127,7 +129,7 @@ class HeftScheduler(Scheduler):
                 task_id: current_time + (workers[worker_id].get_task_queue_waittime(
                     current_time,
                     (job.job_type_id, task_id),
-                    info_staleness=LOAD_INFORMATION_STALENESS,
+                    info_staleness=gcfg.LOAD_INFORMATION_STALENESS,
                     requiring_worker_id=initial_worker_id) if consider_load else 0)
                 for task_id in sorted_tasks
             }
@@ -135,7 +137,7 @@ class HeftScheduler(Scheduler):
             available_memory = workers[worker_id].total_memory * (10**6)
             if consider_cache:
                 available_memory = workers[worker_id].GPU_state.available_memory(current_time)
-                                                                    # info_staleness=PLACEMENT_INFORMATION_STALENESS, \
+                                                                    # info_staleness=gcfg.PLACEMENT_INFORMATION_STALENESS, \
                                                                     # requiring_worker_id=initial_worker_id)
             workers_available_memory[worker_id] = available_memory
             
@@ -194,7 +196,7 @@ class HeftScheduler(Scheduler):
         # 1. check assigned worker wait_time to decide if need to adjust assigned worker
         cur_wait_time = workers[allocated_worker_id].get_task_queue_waittime(current_time, \
                                                                             (job.job_type_id, task_id), \
-                                                                            info_staleness=LOAD_INFORMATION_STALENESS, \
+                                                                            info_staleness=gcfg.LOAD_INFORMATION_STALENESS, \
                                                                             requiring_worker_id=local_worker_id)
         cur_task = job.tasks[task_id]
         tolerable_wait_time = cur_wait_time <= cur_task.task_exec_duration * RESCHEDULE_THREASHOLD
@@ -207,7 +209,7 @@ class HeftScheduler(Scheduler):
         for cur_worker in workers:
             wait_time = cur_worker.get_task_queue_waittime(current_time, \
                                                         (job.job_type_id, task_id), \
-                                                        info_staleness=LOAD_INFORMATION_STALENESS, \
+                                                        info_staleness=gcfg.LOAD_INFORMATION_STALENESS, \
                                                         requiring_worker_id=local_worker_id)
             cur_earliest_start_time = current_time + wait_time
             # 2.1 calculate the intermediate transfer time

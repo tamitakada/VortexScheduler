@@ -30,7 +30,7 @@ class HeftTaskWorker(TaskWorker):
         """
         Add task into the local task queue
         """
-        if not ENABLE_DYNAMIC_MODEL_LOADING and task.model != None and task.model not in self.GPU_state.placed_models(current_time):
+        if task.model != None and task.model not in self.GPU_state.placed_models(current_time):
             print("Static allocation received task that cannot be executed")
             print(f"Allocated: {self.GPU_state.state_at(current_time)}, Requested ID: {task.model.model_id}")
             assert(False)
@@ -43,7 +43,7 @@ class HeftTaskWorker(TaskWorker):
         if task.task_type not in self.max_wait_times or self.max_wait_times[task.task_type] < 0:
             self.max_wait_times[task.task_type] = current_time + task.max_wait_time
 
-        if (not ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
+        if (not gcfg.ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
             return []
 
         events = self.check_task_queue(task.task_type, current_time)
@@ -56,7 +56,7 @@ class HeftTaskWorker(TaskWorker):
         if len(tasks) == 0:
             return []
 
-        if not ENABLE_DYNAMIC_MODEL_LOADING and tasks[0].model != None and tasks[0].model not in self.GPU_state.placed_models(current_time):
+        if tasks[0].model != None and tasks[0].model not in self.GPU_state.placed_models(current_time):
             print("Static allocation received task that cannot be executed")
             print(f"Allocated: {self.GPU_state.state_at(current_time)}, Requested ID: {tasks[0].model.model_id}")
             assert(False)
@@ -70,7 +70,7 @@ class HeftTaskWorker(TaskWorker):
         if tasks[0].task_type not in self.max_wait_times or self.max_wait_times[tasks[0].task_type] < 0:
             self.max_wait_times[tasks[0].task_type] = current_time + task.max_wait_time
 
-        if (not ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
+        if (not gcfg.ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
             return []
 
         events = self.check_task_queue(tasks[0].task_type, current_time)
@@ -99,7 +99,7 @@ class HeftTaskWorker(TaskWorker):
             self.max_wait_times[task_type] = -1
 
         # start next batch
-        if ENABLE_MULTITHREADING:
+        if gcfg.ENABLE_MULTITHREADING:
             for task_type in self.queue_history.keys():
                 batch_end_events = self.check_task_queue(task_type, current_time)
                 events += batch_end_events
@@ -159,18 +159,18 @@ class HeftTaskWorker(TaskWorker):
 
                 # get correct task deadline
                 if self.simulation.centralized_scheduler:
-                    if SLO_GRANULARITY == "TASK":
-                        task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + SLO_SLACK)
+                    if gcfg.SLO_GRANULARITY == "TASK":
+                        task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
                         task_arrival = task.log.task_arrival_at_scheduler_timestamp 
                     else:
-                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
                         task_arrival = task.log.job_creation_timestamp
                 else:
-                    if SLO_GRANULARITY == "TASK":
-                        task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
+                    if gcfg.SLO_GRANULARITY == "TASK":
+                        task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
                         task_arrival = task.log.task_placed_on_worker_queue_timestamp
                     else:
-                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                        task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
                         task_arrival = task.log.job_creation_timestamp
 
                 if (current_time + task.model.batch_exec_times[24][j]) > task_deadline:
@@ -206,22 +206,22 @@ class HeftTaskWorker(TaskWorker):
 
             # get correct task deadline
             if self.simulation.centralized_scheduler:
-                if SLO_GRANULARITY == "TASK":
-                    task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + SLO_SLACK)
+                if gcfg.SLO_GRANULARITY == "TASK":
+                    task_deadline = task.log.task_arrival_at_scheduler_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
                     task_arrival = task.log.task_arrival_at_scheduler_timestamp 
                 else:
-                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
                     task_arrival = task.log.job_creation_timestamp
             else:
-                if SLO_GRANULARITY == "TASK":
-                    task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
+                if gcfg.SLO_GRANULARITY == "TASK":
+                    task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
                     task_arrival = task.log.task_placed_on_worker_queue_timestamp
                 else:
-                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                    task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
                     task_arrival = task.log.job_creation_timestamp
 
-            if (DROP_POLICY == "LATEST_POSSIBLE" and current_time >= task_deadline) or \
-                (DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline):
+            if (gcfg.DROP_POLICY == "LATEST_POSSIBLE" and current_time >= task_deadline) or \
+                (gcfg.DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline):
                 
                 for job_task in task.job.tasks:
                     self.rm_task_in_queue_history(job_task, current_time)
@@ -231,7 +231,7 @@ class HeftTaskWorker(TaskWorker):
                     "drop_time": current_time, 
                     "create_time": task.log.job_creation_timestamp,
                     "arrival_time": task_arrival,
-                    "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
+                    "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
                     "deadline": task_deadline
                 }
                 continue
@@ -268,18 +268,8 @@ class HeftTaskWorker(TaskWorker):
                 curr_send_batch = ready_tasks[i:(i+4)]
 
                 transfer_delay = 0
-                if ENABLE_DYNAMIC_MODEL_LOADING:
-                    if ALLOCATION_STRATEGY == "HERD":
-                        # don't choose worker that is not in the correct group
-                        while curr_send_batch[0].model and curr_send_batch[0].model.model_id not in self.simulation.herd_assignment.group_models[self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].group_id] and \
-                            self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
-                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-                    else:
-                        while curr_send_batch[0].model and self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
-                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-                else:
-                    while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
-                        self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
+                while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
+                    self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
                 
                 if self.next_worker_id[curr_send_batch[0].model.model_id] != self.worker_id:  # The next worker on the pipeline is NOT the same node
                     transfer_delay = CPU_to_CPU_delay(task.result_size * len(curr_send_batch))
@@ -412,35 +402,7 @@ class HeftTaskWorker(TaskWorker):
         task_model_states = list(filter(lambda s: s.model.model_id == task_model_id, 
                                         self.GPU_state.placed_model_states(current_time)))    
         if len(task_model_states) == 0: # model not currently on worker
-            if not ENABLE_DYNAMIC_MODEL_LOADING: # static alloc
-                return np.inf
-            else:
-                task_model = self.simulation.get_model_from_id(task_model_id)
-                fetch_time = SameMachineCPUtoGPU_delay(task_model.model_size)
-                if self.GPU_state.can_fetch_model_on_eviction(task_model, current_time):
-                    # evictions are free
-                    return fetch_time
-                elif self.GPU_state._total_memory < task_model.model_size:
-                    return np.inf # partition too small
-                elif ALLOCATION_STRATEGY == "HERD" and task_model.model_id not in self.simulation.herd_assignment.group_models[self.group_id]:
-                    return np.inf # model ID not in worker's HERD-assigned group
-                else: # not enough space to load right away
-                    latest_avail = 0
-                    placed_model_states = [s for s in self.GPU_state.state_at(current_time) 
-                                           if s.state in [ModelState.IN_FETCH, ModelState.PLACED]]
-                    total_avail_mem = self.GPU_state.available_memory(current_time)
-                    i = 0
-                    while total_avail_mem < task_model.model_size:
-                        total_avail_mem += placed_model_states[i].model.model_size
-                        avail_at = 0
-                        if placed_model_states[i].state == ModelState.IN_FETCH:
-                            avail_at = current_time + self.GPU_state.shortest_time_to_fetch_end(
-                                placed_model_states[i].model.model_id, current_time)
-                        else:
-                            avail_at = placed_model_states[i].reserved_until
-                        latest_avail = max(latest_avail, avail_at)
-                        i += 1
-                    return latest_avail - current_time + fetch_time
+            return np.inf
 
         if self.GPU_state.does_have_idle_copy(task_model_states[0].model, current_time):
             return 0

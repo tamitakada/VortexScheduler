@@ -1,6 +1,6 @@
 from queue import PriorityQueue
 
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 from core.task import Task
 from core.batch import Batch
 from core.events.base import *
@@ -121,7 +121,9 @@ class ShepherdScheduler(Scheduler):
         return (np.mean(arrival_rates), np.mean(throughputs))
 
     def schedule_job_on_arrival(self, job, current_time):
-        if DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
+        super().schedule_job_on_arrival(job, current_time)
+
+        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
             if current_time > 5000:
                 curr_ar, curr_tp, curr_gp = self.get_job_stats_over_past(current_time, samples=1)
                 ar, tput, gput = self.get_job_stats_over_past(current_time)
@@ -160,6 +162,8 @@ class ShepherdScheduler(Scheduler):
             possible across all models and attempts to assign a worker to the batch in round 
             robin order.
         """
+        super().schedule_tasks_on_arrival(tasks, current_time)
+
         per_task_ars = {}
 
         arrived_groups = set()
@@ -167,7 +171,7 @@ class ShepherdScheduler(Scheduler):
             if (self.simulation.task_drop_log["job_id"] == task.job_id).any():
                 continue
 
-            if DROP_POLICY == "TASK_ADMISSION_LIMIT":
+            if gcfg.DROP_POLICY == "TASK_ADMISSION_LIMIT":
                 if current_time > 5000:
                     ar, tput = self.get_task_stats_over_past(current_time, task.task_id)
                     self.per_task_metrics_log.loc[len(self.per_task_metrics_log)] = [current_time, task.job.job_type_id, task.task_id, ar, tput]
@@ -244,7 +248,7 @@ class ShepherdScheduler(Scheduler):
     # FLEX ALGO ----------------------------------------------------------------------------
 
     def _flex_schedule_tasks_on_arrival(self, group, current_time):
-        if DROP_POLICY not in ["NONE", "OPTIMAL"]:
+        if gcfg.DROP_POLICY not in ["NONE", "OPTIMAL"]:
             self._drop_currently_late_tasks(current_time)
         
         events = []
@@ -261,7 +265,7 @@ class ShepherdScheduler(Scheduler):
 
                 assert(batch.size() == largest_batch_size)
 
-                if DROP_POLICY == "OPTIMAL":
+                if gcfg.DROP_POLICY == "OPTIMAL":
                     self._drop_tasks(current_time, batch)
                 
                 self.assign_batch_to_worker(worker.worker_id, batch)
@@ -273,7 +277,7 @@ class ShepherdScheduler(Scheduler):
                 
                 assert(batch.size() == largest_batch_size)
                 
-                if DROP_POLICY == "OPTIMAL":
+                if gcfg.DROP_POLICY == "OPTIMAL":
                     self._drop_tasks(current_time, batch)
                 
                 old_batch_id = self.worker_states[worker.worker_id].id
@@ -352,10 +356,7 @@ class ShepherdScheduler(Scheduler):
                 continue # no tasks queued
 
             if for_worker:
-                if not ENABLE_DYNAMIC_MODEL_LOADING and all(s.model.model_id != mid for s in for_worker.GPU_state.state_at(current_time)):
-                    continue
-                    
-                if ENABLE_DYNAMIC_MODEL_LOADING and self.simulation.get_model_from_id(mid).model_size > for_worker.GPU_state._total_memory:
+                if all(s.model.model_id != mid for s in for_worker.GPU_state.state_at(current_time)):
                     continue
 
             largest_batch = self._form_largest_batch(mid, current_time)
@@ -392,7 +393,7 @@ class ShepherdScheduler(Scheduler):
                 model_queue.put(ot)
 
     def flex_schedule_on_batch_completion(self, worker: Worker, completed_batch: Batch, current_time: float):
-        if DROP_POLICY not in ["NONE", "OPTIMAL"]:
+        if gcfg.DROP_POLICY not in ["NONE", "OPTIMAL"]:
             self._drop_currently_late_tasks(current_time)
         
         # if alr. assigned to a new batch do nothing
@@ -409,7 +410,7 @@ class ShepherdScheduler(Scheduler):
         if largest_batch_size > 0:
             batch = self._form_largest_batch(largest_batch_model_id, current_time, pop=True)
 
-            if DROP_POLICY == "OPTIMAL":
+            if gcfg.DROP_POLICY == "OPTIMAL":
                 self._drop_tasks(current_time, batch)
             
             self.assign_batch_to_worker(worker.worker_id, batch)

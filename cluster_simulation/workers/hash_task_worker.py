@@ -3,6 +3,8 @@ from collections import defaultdict
 from workers.taskworker import *
 from workers.worker import *
 
+import core.configs.gen_config as gcfg
+from core.configs.workflow_config import *
 from core.network import *
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
@@ -31,26 +33,36 @@ class HashTaskWorker(TaskWorker):
         if len(tasks) == 0:
             return []
         
-        assert(ENABLE_DYNAMIC_MODEL_LOADING or 
-               all(task.model == None or task.model in self.GPU_state.placed_models(current_time) for task in tasks))
+        assert(all(task.model == None or task.model in self.GPU_state.placed_models(current_time) for task in tasks))
 
         # add tasks to worker queue
         for task in tasks:
             self.add_task_to_queue_history(task, current_time)
 
         # if concurrency disabled and occupied, do nothing
-        if (not ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
+        if (not gcfg.ENABLE_MULTITHREADING) and any(s.reserved_batch for s in self.GPU_state.state_at(current_time)):
             return []
-        
-        # otherwise, possibly start a batch
-        return self.check_task_queue(tasks[0].model.model_id, current_time)
+
+        events = []
+
+        i = 0
+        model_ids = list(set(task.model.model_id for task in tasks))
+        while True:
+            model_id = model_ids[i]
+            new_events = self.check_task_queue(model_id, current_time)
+            events += new_events
+
+            if len(new_events) == 0:
+                return events
+
+            i = (i + 1) % len(model_ids)
 
     def free_slot(self, current_time, batch: Batch):
         """ Attempts to launch another task. """
         events = super().free_slot(current_time, batch)
 
         # start next batch
-        if ENABLE_MULTITHREADING:
+        if gcfg.ENABLE_MULTITHREADING:
             for mid in self.queue_history.keys():
                 batch_end_events = self.check_task_queue(mid, current_time)
                 events += batch_end_events
@@ -70,6 +82,14 @@ class HashTaskWorker(TaskWorker):
     #  --------------------------- DECENTRALIZED WORKER SCHEDULING  ----------------------
     
     def check_task_queue(self, model_id, current_time):
+        model_state = [s for s in self.GPU_state.state_at(current_time)
+                       if s.model.model_id == model_id]
+        assert(len(model_state) >= 1)
+
+        if len(model_state) > 0 and all(s.reserved_batch for s in model_state):
+            # print(f"[Worker {self.worker_id}] Skip scheduling for model ID {model_id}, alr. executing batch")
+            return []
+
         task_queue = self.get_queue_history(current_time, model_id, info_staleness=0)
         
         for task in task_queue:
@@ -79,15 +99,15 @@ class HashTaskWorker(TaskWorker):
                 continue
 
             # get correct task deadline
-            if SLO_GRANULARITY == "TASK":
-                task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + SLO_SLACK)
+            if gcfg.SLO_GRANULARITY == "TASK":
+                task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
                 task_arrival = task.log.task_placed_on_worker_queue_timestamp
             else:
-                task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + SLO_SLACK)
+                task_deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
                 task_arrival = task.log.job_creation_timestamp
 
-            if (DROP_POLICY == "LATEST_POSSIBLE" and current_time >= task_deadline) or \
-                (DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline):
+            if ((gcfg.DROP_POLICY == "LATEST_POSSIBLE" or gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT") and current_time >= task_deadline) or \
+                (gcfg.DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task_deadline):
                 
                 for job_task in task.job.tasks:
                     self.rm_task_in_queue_history(job_task, current_time)
@@ -100,7 +120,7 @@ class HashTaskWorker(TaskWorker):
                     "drop_time": current_time, 
                     "create_time": task.log.job_creation_timestamp,
                     "arrival_time": task_arrival,
-                    "slo": task.slo if SLO_GRANULARITY == "TASK" else task.job.slo, 
+                    "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
                     "deadline": task_deadline
                 }
                 continue
@@ -152,18 +172,8 @@ class HashTaskWorker(TaskWorker):
                 curr_send_batch = ready_tasks[i:(i+emit_size)]
 
                 transfer_delay = 0
-                if ENABLE_DYNAMIC_MODEL_LOADING:
-                    if ALLOCATION_STRATEGY == "HERD":
-                        # don't choose worker that is not in the correct group
-                        while curr_send_batch[0].model and curr_send_batch[0].model.model_id not in self.simulation.herd_assignment.group_models[self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].group_id] and \
-                            self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
-                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-                    else:
-                        while curr_send_batch[0].model and self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].total_memory * 10**6 < curr_send_batch[0].model.model_size:
-                            self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
-                else:
-                    while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
-                        self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
+                while curr_send_batch[0].model and all(m.model_id != curr_send_batch[0].model.model_id for m in self.simulation.workers[self.next_worker_id[curr_send_batch[0].model.model_id]].GPU_state.placed_models(current_time)):
+                    self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
                 
                 if self.next_worker_id[curr_send_batch[0].model.model_id] != self.worker_id:  # The next worker on the pipeline is NOT the same node
                     transfer_delay = CPU_to_CPU_delay(task.result_size * len(curr_send_batch))

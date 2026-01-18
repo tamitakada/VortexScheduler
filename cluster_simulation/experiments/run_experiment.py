@@ -85,9 +85,9 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
     worker_model_histories = worker_model_histories.sort_values(by="start_time")
     worker_model_histories.to_csv(os.path.join(out_path, "model_history_log.csv"))
 
-    sim.task_exec_log.to_csv(os.path.join(out_path, "task_exec_log.csv"))
+    # sim.task_exec_log.to_csv(os.path.join(out_path, "task_exec_log.csv"))
     sim.task_drop_log.to_csv(os.path.join(out_path, "drop_log.csv"))
-    sim.worker_metrics_log.to_csv(os.path.join(out_path, "worker_metrics_log.csv"))
+    # sim.worker_metrics_log.to_csv(os.path.join(out_path, "worker_metrics_log.csv"))
 
     if scheduler_type == NEXUS:
         sim.scheduler.wf_arrival_rate_log.to_csv(os.path.join(out_path, "nexus_job_arrival_rate_log.csv"))
