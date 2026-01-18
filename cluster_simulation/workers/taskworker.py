@@ -32,7 +32,16 @@ class TaskWorker(Worker):
                 task.job_id, task.task_id, current_time)
             task.log.task_execution_end_timestamp = current_time
 
-            self.simulation.add_task_exec_to_worker_metrics(task, self)
+            task_deadline = -1
+            if gcfg.SLO_GRANULARITY == "TASK" and hasattr(task, "deadline"):
+                task_deadline = task.deadline
+            elif gcfg.SLO_GRANULARITY == "TASK":
+                task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo
+            elif gcfg.SLO_GRANULARITY == "JOB":
+                task_deadline = task.job.create_time + task.job.slo
+
+            self.simulation.add_task_exec_to_worker_metrics(
+                task, self, task_deadline)
 
         self.simulation.batch_exec_log.loc[len(self.simulation.batch_exec_log)] = {
             "start_time": batch.tasks[0].log.task_execution_start_timestamp,
