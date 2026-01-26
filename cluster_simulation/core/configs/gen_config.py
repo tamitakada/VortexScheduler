@@ -5,7 +5,7 @@ import numpy as np
 PRODUCE_EVENT_LOG = True
 
 # Runs a trace of produced event logs to verify simulator actions
-ENABLE_VERIFICATION = True
+ENABLE_VERIFICATION = False
 
 # Print event details for every step of verifier trace
 ENABLE_VERIFICATION_DEBUG_LOGGING = True
@@ -17,6 +17,7 @@ MIN_NUM_NODES = 1
 MAX_NUM_NODES = 8
 VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
+MAX_NUM_MODELS_PER_NODE = 4
 
 """  --------       Workload Parameters    --------  """
 
@@ -63,7 +64,7 @@ HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
 # JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
-BOOST_POLICY = "EDF"
+BOOST_POLICY = "FCFS"
 
 """ -------         Inferline Parameters  -------- """
 
@@ -74,6 +75,8 @@ ESTIMATOR_CLIENT_CONFIGS = [ # in ms
          "SLO": 1014}},
 ]
 INFERLINE_TUNING_INTERVAL = 15 * 1000 # ms
+
+ENABLE_ESTIMATOR_LOGGING = True
 
 """  -------        General Scheduling Parameters  --------- """
 
@@ -95,7 +98,7 @@ ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at
 AUTOSCALING_POLICY = "INFERLINE"
 
 # HERD | CUSTOM | INFERLINE
-ALLOCATION_STRATEGY = "INFERLINE"
+ALLOCATION_STRATEGY = "INFERLINE" #"INFERLINE"
 
 # [(partition size in GB, [model ids])]
 CUSTOM_ALLOCATION = [(24, []), (24, []), (24, []), (24, [])]

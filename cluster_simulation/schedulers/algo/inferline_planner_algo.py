@@ -52,12 +52,16 @@ class Inferline:
         for model in workflow.get_models():
             mcfg.MODELS[model.id]["MAX_BATCH_SIZE"] = allocation.models[model.id].max_batch_size
 
-        # ignore stdout for estimator sim runs
-        with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-            sim = Simulation_central(simulation_name="hashtask",
-                                    job_types_list=[workflow.id],
-                                    produce_breakdown=True)
+        sim = Simulation_central(simulation_name="hashtask",
+                                job_types_list=[workflow.id],
+                                produce_breakdown=True)
+        
+        if gcfg.ENABLE_ESTIMATOR_LOGGING:
             sim.run()
+        else:
+            # ignore stdout for estimator sim runs
+            with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+                sim.run()
 
         for client in sim.sim_stats_log["clients"]:
             p99 = client[workflow.id]["p99_latency_ms"]
@@ -108,8 +112,7 @@ class Inferline:
 
         while not cls.is_feasible(workflow, allocation, slo):
             model = min(workflow.get_models(),
-                        key=lambda m: allocation.count(m) / m.batch_exec_times[24][1] * 1000)
-            
+                        key=lambda m: allocation.count(m.id) / m.batch_exec_times[24][1] * 1000)
             if not allocation.add_model(time, model.id, AllocationUpdateStrategy.SORT_AND_PACK):
                 print("[WARNING] Best allocation P99 latency still violates SLO")
                 return False, allocation
@@ -174,12 +177,15 @@ class Inferline:
             for model in workflow.get_models():
                 mcfg.MODELS[model.id]["MAX_BATCH_SIZE"] = allocation.models[model.id].max_batch_size
 
-            # ignore stdout for estimator sim runs
-            with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
-                sim = Simulation_central(simulation_name="hashtask",
-                                        job_types_list=[workflow.id],
-                                        produce_breakdown=True)
+            sim = Simulation_central(simulation_name="hashtask",
+                                    job_types_list=[workflow.id],
+                                    produce_breakdown=True)
+            if gcfg.ENABLE_ESTIMATOR_LOGGING:
                 sim.run()
+            else:
+                # ignore stdout for estimator sim runs
+                with open(os.devnull, "w") as f, contextlib.redirect_stdout(f):
+                    sim.run()
             
             gcfg.CLIENT_CONFIGS = prev_cfg
             gcfg.ALLOCATION_STRATEGY = prev_alloc_strat
@@ -247,6 +253,7 @@ class Inferline:
             r_obs = observed_jobs / window_size
 
             if r_obs > sample_rate:
+                print("ROBS ", r_obs, " > ", "SR ", sample_rate)
                 r_max = max(r_max, r_obs)
 
             window_start = window_end
@@ -254,6 +261,7 @@ class Inferline:
         delta_workers = []
 
         r_max *= 1000
+        print("RMAX IS ", r_max)
 
         if r_max > 0:
             # NOTE: Prioritizes smaller models for limited cluster setting

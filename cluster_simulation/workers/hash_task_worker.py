@@ -307,4 +307,6 @@ class HashTaskWorker(TaskWorker):
             last_index += 1  # do this for the remaining element after
 
     def get_queue_history(self, current_time, model_id, info_staleness=0) -> list:
+        if model_id not in self.queue_history:
+            return []
         return self.get_history(self.queue_history[model_id], current_time, info_staleness)

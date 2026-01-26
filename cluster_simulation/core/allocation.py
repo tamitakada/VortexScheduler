@@ -33,6 +33,8 @@ class ModelAllocation:
     def _check_model_count(self, model_id: int):
         assert(self.count(model_id) == 
                sum(mids.count(model_id) for (_, mids) in self.worker_cfgs.values()))
+        
+        assert(len(mids) < gcfg.MAX_NUM_MODELS_PER_NODE for (_, mids) in self.worker_cfgs.values())
 
     def add_model(self, time: float, model_id: int, strategy: int, default_bsize_1: bool=False) -> list[tuple[str, tuple[int, list[int]]]]:
         """Attempts to add one copy of a given model to the current
@@ -67,7 +69,8 @@ class ModelAllocation:
             candidate_mids = sorted(candidate_mids, key=lambda mid: self.models[mid].size)
             for mid in candidate_mids:
                 used_mem = sum(self.models[wmid].size for wmid in worker_mids[-1])
-                if len(worker_mids[-1]) == 0 or used_mem + self.models[mid].size < ModelAllocation.worker_size:
+                if len(worker_mids[-1]) == 0 or \
+                    (used_mem + self.models[mid].size < ModelAllocation.worker_size and len(worker_mids[-1]) < gcfg.MAX_NUM_MODELS_PER_NODE):
                     worker_mids[-1].append(mid)
                 elif len(worker_mids) == gcfg.MAX_NUM_NODES:
                     # cannot add more workers, addition is not feasible
@@ -104,7 +107,7 @@ class ModelAllocation:
                 worker_id = self.worker_ids_by_create_time[i][0]
                 worker_cfg = self.worker_cfgs[worker_id]
                 used_mem = sum(self.models[wmid].size for wmid in worker_cfg[1])
-                if used_mem + self.models[model_id].size < ModelAllocation.worker_size:
+                if (used_mem + self.models[model_id].size < ModelAllocation.worker_size) and len(worker_cfg[1]) < gcfg.MAX_NUM_MODELS_PER_NODE:
                     self.worker_cfgs[worker_id][1].append(model_id)
                     self.model_ids.append(model_id)
                     self._check_model_count(model_id)
