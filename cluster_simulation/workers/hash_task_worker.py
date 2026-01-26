@@ -13,6 +13,8 @@ from core.batch import Batch
 
 from schedulers.algo.batching_policies import get_batch
 
+import random
+
 
 class HashTaskWorker(TaskWorker):
     def __init__(self, simulation, id, total_memory, group_id=-1, created_at=0):
@@ -215,11 +217,11 @@ class HashTaskWorker(TaskWorker):
                 curr_send_batch = ready_tasks[i:(i+emit_size)]
 
                 # choose worker to assign next DAG tasks to round robin
-                candidate_worker_idx = 0
+                candidate_worker_idx = random.randint(0, len(self.simulation.worker_ids_by_creation)-1)
                 if curr_send_batch[0].model_data.id in self.last_worker_idx:
                     candidate_worker_idx = (self.last_worker_idx[curr_send_batch[0].model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
                 else:
-                    self.last_worker_idx[curr_send_batch[0].model_data.id] = 0
+                    self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
 
                 candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
 
