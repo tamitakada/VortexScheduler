@@ -19,8 +19,7 @@ def get_batch(time: float, partition_size: int, task_queue: list[Task], preserve
     elif gcfg.BOOST_POLICY == "FCFS":
         task_queue = sorted(task_queue, key=lambda t: t.job.create_time)
     elif gcfg.BOOST_POLICY == "EDF":
-        assert(gcfg.SLO_GRANULARITY == "JOB")
-        task_queue = sorted(task_queue, key=lambda t: t.job.create_time + t.job.slo)
+        task_queue = sorted(task_queue, key=lambda t: t.get_task_deadline())
     else:
         raise RuntimeError("Unknown queue sort policy ", gcfg.BOOST_POLICY)
     
@@ -36,7 +35,7 @@ def get_batch(time: float, partition_size: int, task_queue: list[Task], preserve
     # queue ordering policy check
     if batch and gcfg.BOOST_POLICY in ["FCFS", "EDF"]:
         nonbatched_tasks = [t for t in task_queue 
-                            if all([bt.job_id != t.job_id for bt in batch.tasks])]
+                            if all([bt.job.id != t.job.id for bt in batch.tasks])]
         
         if nonbatched_tasks:
             if gcfg.BOOST_POLICY == "FCFS":
@@ -50,7 +49,7 @@ def get_batch(time: float, partition_size: int, task_queue: list[Task], preserve
                     assert(all([t.job.create_time >= latest_create_time for t in nonbatched_tasks]))
                 elif gcfg.BATCH_POLICY == "OPTIMAL":
                     assert(all([t.job.create_time >= latest_create_time or \
-                                t.deadline < time + t.model.batch_exec_times[partition_size][t.model.batch_sizes.index(batch.size())] 
+                                t.deadline < time + t.model.data.batch_exec_times[partition_size][batch.size()] 
                                 for t in nonbatched_tasks]))
             
             elif gcfg.BOOST_POLICY == "EDF":
@@ -64,7 +63,7 @@ def get_batch(time: float, partition_size: int, task_queue: list[Task], preserve
                     assert(all([t.job.create_time + t.job.slo >= latest_deadline for t in nonbatched_tasks]))
                 elif gcfg.BATCH_POLICY == "OPTIMAL":
                     assert(all([t.job.create_time + t.job.slo >= latest_deadline or \
-                                t.deadline < time + t.model.batch_exec_times[partition_size][t.model.batch_sizes.index(batch.size())] 
+                                t.deadline < time + t.model.data.batch_exec_times[partition_size][batch.size()] 
                                 for t in nonbatched_tasks]))
 
     if not batch and gcfg.BATCH_POLICY != "LARGEST" and gcfg.FALLBACK_TO_LARGEST_BATCH:
@@ -81,7 +80,7 @@ def get_largest_batch(task_queue: list[Task]) -> Batch | None:
     tasks = []
     for task in task_queue:
         tasks.append(task)
-        if len(tasks) >= task.max_batch_size:
+        if len(tasks) >= task.model_data.max_batch_size:
             break
 
     if len(tasks) == 0:
@@ -95,31 +94,23 @@ def get_optimal_batch(time: float, partition_size: int, task_queue: list[Task], 
     Returns largest batch drawn from [task_queue] s.t. no task
     deadline in the batch is violated.
     """
-    assert(all(task.model.model_id == task_queue[0].model.model_id for task in task_queue))
+    assert(all(task.model_data.id == task_queue[0].model.data.id for task in task_queue))
 
     if preserve_order:
-        assert(hasattr(t, "deadline") for t in task_queue)
-        assert(task_queue == sorted(task_queue, key=lambda t: t.deadline))
+        assert(task_queue == sorted(task_queue, key=lambda t: t.get_task_deadline()))
     else:
-        for task in task_queue:
-            # get correct task deadline
-            if gcfg.SLO_GRANULARITY == "TASK":
-                task.deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo * (1 + gcfg.SLO_SLACK)
-            else:
-                task.deadline = task.log.job_creation_timestamp + task.job.slo * (1 + gcfg.SLO_SLACK)
-
-        task_queue = sorted(task_queue, key=lambda t: t.deadline)
+        task_queue = sorted(task_queue, key=lambda t: t.get_task_deadline())
 
     max_bsize = task_queue[0].max_batch_size
 
     # if no valid batch possible, return None
-    if all((time + task.model.batch_exec_times[partition_size][0] > task.deadline)
+    if all((time + task.model_data.batch_exec_times[partition_size][1] > task.get_task_deadline())
            for task in task_queue):
         return None
 
     if max_bsize == 1:
         for task in task_queue: 
-            if time + task.model.batch_exec_times[partition_size][0] <= task.deadline:
+            if time + task.model_data.batch_exec_times[partition_size][1] <= task.get_task_deadline():
                 return Batch([task])
         return None
 
@@ -129,7 +120,7 @@ def get_optimal_batch(time: float, partition_size: int, task_queue: list[Task], 
     for i in range(len(task_queue) - 1, -1, -1):
         task = task_queue[i]
         for j in range(1, max_bsize+1):
-            if time + task.model.batch_exec_times[partition_size][task.model.batch_sizes.index(j)] > task.deadline:
+            if time + task.model_data.batch_exec_times[partition_size][j] > task.get_task_deadline():
                 # on SLO violation, task [i] cannot be incl. in batch of size [j]
                 bsizes[i][j] = 0
             elif i == (len(task_queue)-1): # if on last task and no SLO violation, always 1
@@ -152,14 +143,14 @@ def get_optimal_batch(time: float, partition_size: int, task_queue: list[Task], 
 
     # batched tasks should not violate deadline
     if len(tasks) > 0:
-        proposed_exec_time = task_queue[0].model.batch_exec_times[partition_size][task_queue[0].model.batch_sizes.index(len(tasks))]
+        proposed_exec_time = task_queue[0].model_data.batch_exec_times[partition_size][len(tasks)]
         assert(all(t.deadline > time + proposed_exec_time for t in tasks))
 
     if len(tasks) < max_bsize and len(task_queue) > len(tasks):
         if len(tasks) == 0:
             # if no valid batch found, all queued tasks should violate
             # slo even with min batch size (=1)
-            assert(all(t.deadline < time + task_queue[0].model.batch_exec_times[partition_size][0] for t in task_queue))
+            assert(all(t.deadline < time + task_queue[0].model_data.batch_exec_times[partition_size][1] for t in task_queue))
         else:
             # if batch size < max batch size and unbatched tasks exist,
             # then any larger batch must cause an SLO violation for some
@@ -168,7 +159,7 @@ def get_optimal_batch(time: float, partition_size: int, task_queue: list[Task], 
             edf_sorted = sorted(task_queue, key=lambda t: t.deadline)
             min_larger_size = len(tasks) + 1
             larger_candidate_batch = edf_sorted[(len(edf_sorted)-min_larger_size):]
-            larger_candidate_exec = task_queue[0].model.batch_exec_times[partition_size][task_queue[0].model.batch_sizes.index(min_larger_size)]
+            larger_candidate_exec = task_queue[0].model_data.batch_exec_times[partition_size][min_larger_size]
 
             assert(larger_candidate_batch[-1].deadline < time + larger_candidate_exec)
 

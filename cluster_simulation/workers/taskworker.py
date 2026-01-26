@@ -9,8 +9,8 @@ from core.events.worker_events import *
 
 
 class TaskWorker(Worker):
-    def __init__(self, simulation, worker_id, total_memory, group_id=-1):
-        super().__init__(simulation, worker_id, total_memory, group_id=group_id)
+    def __init__(self, simulation, id, total_memory, group_id=-1, created_at=0):
+        super().__init__(simulation, id, total_memory, group_id=group_id, created_at=created_at)
         self.involved = False
 
     def add_task(self, current_time, task):
@@ -24,30 +24,23 @@ class TaskWorker(Worker):
         assert(not self.did_abandon_batch(batch.id))
 
         # finished batch clean up & logging
-        if batch.model != None:
+        if batch.model_data != None:
             self.GPU_state.release_busy_model(batch.id, current_time)
 
         for task in batch.tasks:
             self.simulation.add_job_completion_time(
-                task.job_id, task.task_id, current_time)
+                task.job.id, task.task_id, current_time)
             task.log.task_execution_end_timestamp = current_time
 
-            task_deadline = -1
-            if gcfg.SLO_GRANULARITY == "TASK" and hasattr(task, "deadline"):
-                task_deadline = task.deadline
-            elif gcfg.SLO_GRANULARITY == "TASK":
-                task_deadline = task.log.task_placed_on_worker_queue_timestamp + task.slo
-            elif gcfg.SLO_GRANULARITY == "JOB":
-                task_deadline = task.job.create_time + task.job.slo
-
             self.simulation.add_task_exec_to_worker_metrics(
-                task, self, task_deadline)
+                task, self, task.get_task_deadline())
 
         self.simulation.batch_exec_log.loc[len(self.simulation.batch_exec_log)] = {
+            "batch_id": batch.id,
             "start_time": batch.tasks[0].log.task_execution_start_timestamp,
             "end_time": current_time,
-            "worker_id": self.worker_id,
-            "model_id": batch.model.model_id,
+            "worker_id": self.id,
+            "model_id": batch.model_data.id,
             "batch_size": batch.size(),
             "job_ids": batch.job_ids
         }
@@ -58,22 +51,17 @@ class TaskWorker(Worker):
     #  ---------------------------  TASK EXECUTION  ----------------------
 
     def maybe_start_batch(self, batch: Batch, current_time: float) -> list[EventOrders]:
+        """Start batch if exists a fully fetched idle copy of required model.
         """
-            Attempts to start [batch], given enough GPU memory. If a
-            batch is started, updates task type's next wake up to max_wait_time +
-            earliest remaining task's arrival.
-        """
-        batch_end_events = []
+        # TODO: future feat: handle can run on evict
 
-        can_run = self.can_run_task(current_time, batch.model)
-        if can_run == self._CAN_RUN_ON_EVICT:
-            current_time += self.evict_models_from_GPU_until(
-                current_time, batch.model.model_size, self.FCFS_EVICTION)
-        
-        if can_run == self._CAN_RUN_NOW or can_run == self._CAN_RUN_ON_EVICT:
+        if any(s.state == ModelState.PLACED and s.model.data.id == batch.model_data.id and not s.reserved_batch
+               for s in self.GPU_state.state_at(current_time)):
+            
             batch_end_events, task_end_time = self.batch_execute(batch, current_time)
+            return batch_end_events
         
-        return batch_end_events
+        return []
 
     def batch_execute(self, batch: Batch, current_time: float):
         """
@@ -84,25 +72,27 @@ class TaskWorker(Worker):
         self.involved = True
 
         for task in batch.tasks:
-            task.executing_worker_id = self.worker_id
+            task.executing_worker_id = self.id
 
-        batch_exec_time = batch.tasks[0].task_exec_duration if batch.model is None else \
-            batch.tasks[0].model.get_exec_time(batch.size(), self.total_memory)
-        
+        batch_exec_time = batch.model_data.get_randomized_exec_time(batch.size(), self.total_memory)
         model_fetch_time = 0
-        if batch.model != None:
-            if self.GPU_state.does_have_idle_copy(batch.model, current_time):
-                self.GPU_state.reserve_idle_copy(
-                    batch.model, current_time, batch, current_time+batch_exec_time)
-            elif any(s.model == batch.model and s.state == ModelState.IN_FETCH 
-                     for s in self.GPU_state.state_at(current_time)):
-                # NOTE: assumes any model of this ID being fetched is NOT reserved for any other batch
-                model_fetch_time = self.GPU_state.shortest_time_to_fetch_end(batch.model.model_id, current_time)
-                self.GPU_state.reserve_idle_copy( # problem: not marked idle earlier
-                    batch.model, current_time, batch, 
-                    current_time+model_fetch_time+batch_exec_time)
+
+        if batch.model_data != None:
+            if self.GPU_state.does_have_idle_copy(batch.model_data.id, current_time):
+                reserved_instance_id = self.GPU_state.reserve_idle_copy(
+                   batch.model_data, current_time, batch, batch_exec_time)
+
+                # verify reserved instance
+                reserved_state = [s for s in self.GPU_state.state_at(current_time)
+                                  if s.model.id == reserved_instance_id][0]
+                assert(reserved_state.reserved_until >= (current_time + batch_exec_time))
+                assert(reserved_state.reserved_batch == batch)
+                assert(reserved_state.model.data.id == batch.model_data.id)
+                assert(reserved_state.state == ModelState.PLACED)
+
+                batch_exec_time = reserved_state.reserved_until - current_time
             else:
-                # assert(False)
+                assert(False) # not allowing currently
                 model_fetch_time = self.fetch_model(
                     batch.model, batch, current_time, exec_time=batch_exec_time)
         
@@ -116,9 +106,9 @@ class TaskWorker(Worker):
         task_end_events = []
 
         task_end_events.append(EventOrders(current_time, BatchStartEvent(
-            self, batch_id=batch.id, job_ids=batch.job_ids, task_type=batch.tasks[0].task_type)))
+            self, batch.model_data.id, batch_id=batch.id, job_ids=batch.job_ids)))
         task_end_events.append(EventOrders(task_end_time, BatchEndEvent(
-            self, batch, job_ids=batch.job_ids, task_type=batch.tasks[0].task_type)))
+            self, batch, job_ids=batch.job_ids)))
         return task_end_events, task_end_time
 
     #  ---------------------------  Subsequent TASK Transfer   --------------------
@@ -130,7 +120,7 @@ class TaskWorker(Worker):
         raise NotImplementedError()
 
     def get_task_queue_waittime(self, current_time, task_type, info_staleness=0, requiring_worker_id=None):
-        if requiring_worker_id != None and requiring_worker_id != self.worker_id:
+        if requiring_worker_id != None and requiring_worker_id != self.id:
             info_staleness = 0
 
         task_model_id = WORKFLOW_LIST[task_type[0]]["TASKS"][task_type[1]]["MODEL_ID"]

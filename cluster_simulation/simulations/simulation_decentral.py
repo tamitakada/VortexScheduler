@@ -3,13 +3,12 @@ from workers.taskworker import *
 
 
 class Simulation_decentral(Simulation):
-    def __init__(self, simulation_name="", job_split="", num_workers=1, job_types_list=[0], dynamic_adjust=True, consider_load=True, consider_cache=True, produce_breakdown=False):
+    def __init__(self, simulation_name="", job_types_list=[0], dynamic_adjust=True, consider_load=True, consider_cache=True, produce_breakdown=False):
 
-        Simulation.__init__(self, simulation_name=simulation_name, job_split=job_split, \
-                            centralized_scheduler=False, \
-                            dynamic_adjust=dynamic_adjust, \
-                            total_workers=num_workers, \
-                            job_types_list=job_types_list,\
+        Simulation.__init__(self, simulation_name=simulation_name,
+                            centralized_scheduler=False,
+                            dynamic_adjust=dynamic_adjust,
+                            job_types_list=job_types_list,
                             produce_breakdown=produce_breakdown)
 
         self.consider_load, self.consider_cache = consider_load, consider_cache

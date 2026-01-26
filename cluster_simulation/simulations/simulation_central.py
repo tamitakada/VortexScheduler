@@ -1,40 +1,48 @@
-from core.simulation import *
+from core.simulation import Simulation
 import core.configs.gen_config as gcfg
+import core.configs.model_config as mcfg
 
 from workers.taskworker import *
 
 from schedulers.algo.herd_algo import *
+
 from schedulers.centralized.hashtask_scheduler import HashTaskScheduler
-from schedulers.centralized.heft_scheduler import HeftScheduler
-from schedulers.centralized.shepherd.shepherd_scheduler import ShepherdScheduler
-from schedulers.centralized.nexus_scheduler import NexusScheduler
+# from schedulers.centralized.heft_scheduler import HeftScheduler
+# from schedulers.centralized.shepherd.shepherd_scheduler import ShepherdScheduler
+# from schedulers.centralized.nexus_scheduler import NexusScheduler
 
 
 class Simulation_central(Simulation):
     
-    def __init__(self, simulation_name="", job_split="", num_workers=1, job_types_list=[0], produce_breakdown=False):
+    def __init__(self, simulation_name="", job_types_list=[0], produce_breakdown=False, inferline=None):
 
-        Simulation.__init__(self, simulation_name=simulation_name, job_split=job_split,\
-                            centralized_scheduler=True,\
-                            total_workers=num_workers,\
-                            job_types_list=job_types_list,\
-                            produce_breakdown=produce_breakdown)
+        Simulation.__init__(self, simulation_name=simulation_name,
+                            centralized_scheduler=True,
+                            job_types_list=job_types_list,
+                            produce_breakdown=produce_breakdown,
+                            inferline=inferline)
         
         self.herd_assignment = None
+
+        self.allocation = None
+        self.last_scale = 0
+
         self.initialize_workers()
 
-        if self.simulation_name == "centralheft":
-            self.scheduler = HeftScheduler(self, self.herd_assignment)
-        elif self.simulation_name == "hashtask":
+        if self.simulation_name == "hashtask":
             self.scheduler = HashTaskScheduler(self, self.herd_assignment)
-        elif self.simulation_name == "shepherd":
-            self.scheduler = ShepherdScheduler(self, self.herd_assignment)
-        elif self.simulation_name == "nexus":
-            self.scheduler = NexusScheduler(self, self.herd_assignment)
+        # elif self.simulation_name == "centralheft":
+        #     self.scheduler = HeftScheduler(self, self.herd_assignment)
+        # elif self.simulation_name == "shepherd":
+        #     self.scheduler = ShepherdScheduler(self, self.herd_assignment)
+        # elif self.simulation_name == "nexus":
+        #     self.scheduler = NexusScheduler(self, self.herd_assignment)
 
     def schedule_job_and_send_tasks(self, job, current_time):
-        return self.scheduler.schedule_job_on_arrival(job, current_time)
-        
+        scheduler_events = self.scheduler.schedule_job_on_arrival(job, current_time)
+        scaler_events = self.scale_cluster(current_time)
+        return scheduler_events + scaler_events
+
     def schedule_tasks_on_arrival(self, tasks, current_time):
         return self.scheduler.schedule_tasks_on_arrival(tasks, current_time)
     
@@ -47,16 +55,7 @@ class Simulation_central(Simulation):
         if job_is_completed:
             self.remaining_jobs -= 1
 
-    def run(self, infline=None):
-        # print("CONFIGS: =====================")
-        # print(gcfg.CLIENT_CONFIGS)
-        # print()
-        # print(gcfg.CUSTOM_ALLOCATION)
-        # print()
-        # print([(m["MAX_BATCH_SIZE"]) for m in mcfg.MODELS])
-        # print()
-        
-        self.generate_workflows()
+    def run(self):
         self.generate_all_jobs()
 
         self.event_queue.put(EventOrders(500, SampleWorkerMetrics(self)))
@@ -71,9 +70,9 @@ class Simulation_central(Simulation):
             print(cur_event.to_string())
             print(f"Jobs left: {self.remaining_jobs}, dropped: {len(self.task_drop_log)}")
 
-            worker_id = -1
+            worker_id = "N/A"
             if type(cur_event.event).is_worker_event():
-                worker_id = cur_event.event.worker.worker_id
+                worker_id = cur_event.event.worker.id
             self.event_log.loc[len(self.event_log)] = [cur_event.current_time, worker_id, cur_event.event.to_string()]
 
             assert cur_event.current_time >= last_time

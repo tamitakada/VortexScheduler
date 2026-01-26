@@ -9,12 +9,12 @@ class Batch:
     """
     def __init__(self, tasks: list[Task]):
         assert(len(tasks) > 0)
-        assert(len(set(t.job_id for t in tasks)) == len(tasks))
+        assert(len(set(t.job.id for t in tasks)) == len(tasks))
 
         self.id = uuid.uuid4()
         self.tasks = tasks
-        self.model = tasks[0].model
-        self.job_ids = list(map(lambda t: t.job_id, tasks))
+        self.model_data = tasks[0].model_data
+        self.job_ids = list(map(lambda t: t.job.id, tasks))
 
     def size(self) -> int:
         return len(self.tasks)
@@ -26,7 +26,7 @@ class Batch:
         return value is not None and type(value) == Batch and value.id == self.id
     
     def __str__(self):
-        return f"[Batch {self.id} | Type {self.tasks[0].task_type}] <Jobs {self.job_ids}>"
+        return f"[Batch {self.id} | Model ID {self.model_data.id}] <Jobs {self.job_ids}>"
     
     def __repr__(self):
         return self.__str__()

@@ -1,6 +1,5 @@
 from core.job import *
 from core.network import *
-from core.configs.gen_config import *
 
 from core.events.base import *
 
@@ -16,16 +15,11 @@ class JobArrivalAtScheduler(Event):
         self.job = job
 
     def run(self, current_time):
-        # Schedule job
-        if self.simulation.job_split == "PER_TASK":
-            for task in self.job.tasks:
-                task.log.task_arrival_at_scheduler_timestamp = current_time
-            new_events = self.simulation.schedule_job_and_send_tasks(
-                self.job, current_time)
-        # elif self.simulation.job_split == "PER_JOB":
-        #     new_events = self.simulation.schedule_job_and_send_job(
-        #         self.job, current_time)
-        return new_events
+        for task in self.job.tasks:
+            task.log.task_arrival_at_scheduler_timestamp = current_time
+        
+        return self.simulation.schedule_job_and_send_tasks(
+            self.job, current_time)
     
     def to_string(self):
         return "[Job Arrival at Scheduler (Job {})] ++".format(self.job.id)
@@ -48,7 +42,7 @@ class TasksArrivalAtScheduler(Event):
     def run(self, current_time):
         # leave out dropped tasks
         self.tasks = [task for task in self.tasks 
-                      if not (self.simulation.task_drop_log["job_id"] == task.job_id).any()]
+                      if not (self.simulation.task_drop_log["job_id"] == task.job.id).any()]
         if not self.tasks:
             return []
 
@@ -60,7 +54,7 @@ class TasksArrivalAtScheduler(Event):
         return self.simulation.schedule_tasks_on_arrival(self.tasks, current_time)
    
     def to_string(self):
-        return f"[Tasks Arrival at Scheduler (Type: {self.tasks[0].task_type}, Job IDs: {list(map(lambda t: t.job_id, self.tasks))})] ++"
+        return f"[Tasks Arrival at Scheduler (Job ID, Task ID: {[(t.job.id, t.task_id) for t in self.tasks]}) ++"
     
     def is_worker_event():
         return False
@@ -128,7 +122,7 @@ class AbortAllJobsEvent(Event):
         # NOTE: assumes abort is costless
 
         events = []
-        for worker in self.simulation.workers:
+        for worker in self.simulation.workers.values():
             curr_batch_ids = [s.reserved_batch.id for s in worker.GPU_state.state_at(current_time) if s.reserved_batch]
             for batch_id in curr_batch_ids:
                 evicted_batch = worker.evict_batch(batch_id, current_time)
@@ -141,12 +135,12 @@ class AbortAllJobsEvent(Event):
                     raise NotImplementedError("Job abort for decentralized scheduler")
             
             if self.simulation.simulation_name == "shepherd":
-                assigned_batch = self.simulation.scheduler.worker_states[worker.worker_id]
+                assigned_batch = self.simulation.scheduler.worker_states[worker.id]
                 if assigned_batch and not worker.did_abandon_batch(assigned_batch.id):
                     Worker._abandoned_batches.append(assigned_batch.id)
 
         assert(all(all(not s.reserved_batch for s in w.GPU_state.state_at(current_time)) 
-                    for w in self.simulation.workers))
+                    for w in self.simulation.workers.values()))
         
         if self.run_herd_sched:
             events.append(EventOrders(current_time, RerunHerdScheduler(self.simulation)))
@@ -229,6 +223,47 @@ class SampleWorkerMetrics(Event):
     
     def to_string(self):
         return "[Sample Worker Metrics]"
+    
+    def is_worker_event():
+        return False
+
+
+class AddWorkerToCluster(Event):
+    """
+    Event signifying a worker should be added to the cluster.
+    """
+
+    def __init__(self, simulation, id, memory_size, model_ids_to_load=[]):
+        self.simulation = simulation
+        self.worker_id = id
+        self.memory_size = memory_size
+        self.model_ids_to_load = model_ids_to_load
+
+    def run(self, current_time):
+        return self.simulation.add_worker(
+            current_time, self.worker_id, self.memory_size, self.model_ids_to_load)
+        
+    def to_string(self):
+        return f"[Add Worker] ID: {self.worker_id}, Size: {self.memory_size}, Loaded models: {self.model_ids_to_load}"
+    
+    def is_worker_event():
+        return False
+    
+
+class RemoveWorkerFromCluster(Event):
+    """
+    Event signifying a worker should be removed from the cluster.
+    """
+
+    def __init__(self, simulation, worker_id):
+        self.simulation = simulation
+        self.worker_id = worker_id
+
+    def run(self, current_time):
+        return self.simulation.remove_worker(current_time, self.worker_id)
+        
+    def to_string(self):
+        return f"[Remove Worker] Worker {self.worker_id}"
     
     def is_worker_event():
         return False

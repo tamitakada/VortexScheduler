@@ -37,7 +37,7 @@ class ExternalClient(object):
         return job
 
     def select_initial_worker_id(self) -> int:
-        initial_worker_id = np.random.choice(range(len(self.simulation.workers)))
+        initial_worker_id = np.random.choice(range(len(self.simulation.workers.keys()))).id
         return initial_worker_id
 
     def log_job_creation_time(self, job: Job, creation_time: float) -> Job:

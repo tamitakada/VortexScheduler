@@ -168,7 +168,7 @@ class ShepherdScheduler(Scheduler):
 
         arrived_groups = set()
         for task in tasks:
-            if (self.simulation.task_drop_log["job_id"] == task.job_id).any():
+            if (self.simulation.task_drop_log["job_id"] == task.job.id).any():
                 continue
 
             if gcfg.DROP_POLICY == "TASK_ADMISSION_LIMIT":
@@ -194,7 +194,7 @@ class ShepherdScheduler(Scheduler):
                     if curr_limit > 0 and ar_with_task > curr_limit:
                         self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
                             "client_id": task.job.client_id,
-                            "job_id": task.job_id,
+                            "job_id": task.job.id,
                             "workflow_id": task.task_type[0],
                             "task_id": task.task_type[1],
                             "drop_time": current_time,
@@ -299,7 +299,7 @@ class ShepherdScheduler(Scheduler):
                     skipped_tasks.append(ot)
                     continue
 
-                if any(t.job_id == ot.task.job_id and t.task_id == ot.task.task_id for t in curr_batch.tasks):
+                if any(t.job_id == ot.task.job.id and t.task_id == ot.task.task_id for t in curr_batch.tasks):
                     # batched tasks should have been popped
                     assert(False)
 
@@ -308,7 +308,7 @@ class ShepherdScheduler(Scheduler):
                 if (time + curr_batch_exec_time + ot.task.job.get_min_remaining_processing_time()) > ot.deadline:
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
                         "client_id": ot.task.job.client_id,
-                        "job_id": ot.task.job_id,
+                        "job_id": ot.task.job.id,
                         "workflow_id": ot.task.task_type[0],
                         "task_id": ot.task.task_type[1],
                         "drop_time": time,
@@ -377,7 +377,7 @@ class ShepherdScheduler(Scheduler):
                 if time > ot.deadline:
                     self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
                         "client_id": ot.task.job.client_id,
-                        "job_id": ot.task.job_id,
+                        "job_id": ot.task.job.id,
                         "workflow_id": ot.task.task_type[0],
                         "task_id": ot.task.task_type[1],
                         "drop_time": time,

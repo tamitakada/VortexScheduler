@@ -29,7 +29,7 @@ def _get_processing_time(job: Job, complete_task_ids: set[int]) -> float:
         # Do we include things like GPU_to_GPU_delay? Does it make sense to
         # use execution_time from a previous run to start?
         max_cum_processing_time += max([
-            task.model.batch_exec_times[24][0] for task in available_tasks
+            task.model_data.batch_exec_times[24][1] for task in available_tasks
         ])
         for task in available_tasks:
             for dep in dependents[task.task_id]:

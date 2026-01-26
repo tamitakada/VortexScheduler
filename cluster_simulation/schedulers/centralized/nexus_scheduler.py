@@ -37,7 +37,7 @@ class NexusScheduler(Scheduler):
         self.task_slo_log = pd.DataFrame(columns=["time", "workflow_id", "task_id", "slo", "bsize"])
 
         # for round robin scheduling
-        self.next_worker_id = { jt: [0 for _ in get_task_types([jt])] for jt in self.simulation.job_types_list }
+        self.last_worker_idx = {}
 
     # TODO: Use Nexus global allocation/scheduler?
     def nexus_schedule_saturate(sessions: list[tuple[Model, float, float]]):
@@ -115,7 +115,7 @@ class NexusScheduler(Scheduler):
             arrived_tasks = self.arrived_task_log[(self.arrived_task_log["model_id"]==task.model.model_id) & \
                                   (self.arrived_task_log["time"] <= time) & \
                                   (self.arrived_task_log["time"] > (time - measurement_interval))]
-            num_model_workers = len([w for w in self.simulation.workers 
+            num_model_workers = len([w for w in self.simulation.workers.values() 
                                      if any(s.model.model_id == task.model.model_id for s in w.GPU_state.state_at(time))])
             task_model_arrival_rates[task.task_id] = len(arrived_tasks) / num_model_workers / measurement_interval * 1000 #len(set(arrived_jobs["job_id"])) / measurement_interval * 1000  
 
@@ -505,7 +505,7 @@ class NexusScheduler(Scheduler):
 
         for task in job.tasks:
             self.arrived_task_log.loc[len(self.arrived_task_log)] = \
-                [current_time, task.job.job_type_id, task.job_id, task.task_id, task.model.model_id]
+                [current_time, task.job.job_type_id, task.job.id, task.task_id, task.model.model_id]
     
         if current_time > 1000:
             self.update_task_slos_if_needed(job, current_time)
@@ -536,7 +536,7 @@ class NexusScheduler(Scheduler):
 
         for task in tasks:
             self.arrived_task_log.loc[len(self.arrived_task_log)] = \
-                [current_time, task.job.job_type_id, task.job_id, task.task_id]
+                [current_time, task.job.job_type_id, task.job.id, task.task_id]
         
         # from hashtask_scheduler
         task_arrival_events = []
@@ -554,10 +554,21 @@ class NexusScheduler(Scheduler):
     # from hashtask_scheduler
     def _assign_adfg(self, tasks, current_time):
         for task in tasks:
+            candidate_worker_idx = 0
+            if task.model_data.id in self.last_worker_idx:
+                candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+
+            candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
             # don't choose worker without the required model
-            while task.model and all(m.model_id != task.model.model_id for m in self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].GPU_state.placed_models(current_time)):
-                self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
-            
-            task.ADFG[task.task_id] = self.next_worker_id[task.task_type[0]][task.task_id]
+            while task.model_data and \
+                all(s.model.data.id != task.model_data.id for s in
+                    self.simulation.works[candidate_worker_id].GPU_state.state_at(current_time)):
+
+                candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
+                candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+            task.ADFG[task.task_id] = candidate_worker_id
             task.job.ADFG[task.task_id] = task.ADFG
-            self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
+
+            self.last_worker_idx[task.model_data.id] = candidate_worker_idx

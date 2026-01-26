@@ -1,4 +1,4 @@
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 from core.model import Model
 from core.configs.workflow_config import *
 
@@ -9,8 +9,8 @@ from gurobipy import GRB
 
 
 def _model_affinity(m1: Model, m2: Model) -> float:
-    alpha_1, beta_1, r1, p1, err1 = stats.linregress(m1.batch_sizes, m1.batch_exec_times[24])
-    alpha_2, beta_2, r2, p2, err2 = stats.linregress(m2.batch_sizes, m2.batch_exec_times[24])
+    alpha_1, beta_1, r1, p1, err1 = stats.linregress(m1.data.batch_sizes, m1.data.batch_exec_times[24])
+    alpha_2, beta_2, r2, p2, err2 = stats.linregress(m2.data.batch_sizes, m2.data.batch_exec_times[24])
 
     assert(alpha_1 > 0 and alpha_2 > 0)
 
@@ -60,7 +60,7 @@ def get_herd_assignment(task_types: list[tuple[int,int]], all_models: list[Model
     z_ij = model.addVars(I, J, vtype=GRB.CONTINUOUS, name="z_ij") # x[i][j] * size[j]
     B = model.addVar(vtype=GRB.CONTINUOUS, name="B") # min. burst tolerance over i
 
-    N = TOTAL_NUM_OF_NODES      # no. GPUs
+    N = gcfg.MAX_NUM_NODES#gcfg.TOTAL_NUM_OF_NODES      # no. GPUs
     G = 12                       # max GPUs per group, 12 in paper
     mem = GPU_MEMORY_SIZE * G   # cluster total memory
 

@@ -4,7 +4,6 @@ from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 
 from schedulers.centralized.scheduler import Scheduler
-# from schedulers.algo.inferline_planner_algo import Inferline
 
 import pandas as pd
 
@@ -16,8 +15,8 @@ class HashTaskScheduler(Scheduler):
 
     def __init__(self, simulation, herd_assignment=None):
         super().__init__(simulation, herd_assignment)
-        self.next_worker_id = { jt: [0 for _ in get_task_types([jt])] for jt in self.simulation.job_types_list }
-        # self.last_scale = 0
+
+        self.last_worker_idx = {}
 
     def schedule_job_on_arrival(self, job, current_time):
         super().schedule_job_on_arrival(job, current_time)
@@ -43,8 +42,6 @@ class HashTaskScheduler(Scheduler):
         self._assign_adfg(tasks, current_time)
         
         for task in tasks:
-            self.arrived_task_log.loc[len(self.arrived_task_log)] = [current_time, task.job.id, task.task_id]
-
             task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
@@ -54,10 +51,21 @@ class HashTaskScheduler(Scheduler):
     
     def _assign_adfg(self, tasks, current_time):
         for task in tasks:
+            candidate_worker_idx = 0
+            if task.model_data.id in self.last_worker_idx:
+                candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+
+            candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
             # don't choose worker without the required model
-            while task.model and all(m.model_id != task.model.model_id for m in self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].GPU_state.placed_models(current_time)):
-                self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
-            
-            task.ADFG[task.task_id] = self.next_worker_id[task.task_type[0]][task.task_id]
+            while task.model_data and \
+                all(s.model.data.id != task.model_data.id for s in
+                    self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
+
+                candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
+                candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+            task.ADFG[task.task_id] = candidate_worker_id
             task.job.ADFG[task.task_id] = task.ADFG
-            self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
+
+            self.last_worker_idx[task.model_data.id] = candidate_worker_idx

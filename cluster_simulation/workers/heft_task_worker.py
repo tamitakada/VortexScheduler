@@ -201,7 +201,7 @@ class HeftTaskWorker(TaskWorker):
         
         for task in task_queue:
             # skip dropped tasks
-            if (self.simulation.task_drop_log["job_id"]==task.job_id).any():
+            if (self.simulation.task_drop_log["job_id"]==task.job.id).any():
                 continue
 
             # get correct task deadline
@@ -227,7 +227,7 @@ class HeftTaskWorker(TaskWorker):
                     self.rm_task_in_queue_history(job_task, current_time)
                 self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
                     "client_id": task.job.client_id,
-                    "job_id": task.job_id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
+                    "job_id": task.job.id, "workflow_id": task.task_type[0], "task_id": task.task_type[1],
                     "drop_time": current_time, 
                     "create_time": task.log.job_creation_timestamp,
                     "arrival_time": task_arrival,
@@ -239,7 +239,7 @@ class HeftTaskWorker(TaskWorker):
         # get queue after drops
         task_queue = [task for task in self.get_queue_history(current_time, task_type, info_staleness=0)
                       if current_time >= task.log.task_placed_on_worker_queue_timestamp and \
-                        (self.simulation.task_drop_log["job_id"]!=task.job_id).all()]
+                        (self.simulation.task_drop_log["job_id"]!=task.job.id).all()]
         if len(task_queue) > 0:
             max_bsize = task_queue[0].max_batch_size
             tasks = self.get_largest_valid_batch(task_queue, max_bsize, current_time)
@@ -282,7 +282,7 @@ class HeftTaskWorker(TaskWorker):
                 self.next_worker_id[curr_send_batch[0].model.model_id] = (self.next_worker_id[curr_send_batch[0].model.model_id] + 1) % len(self.simulation.workers)
         else:
             for task in batch.tasks:
-                cur_job = self.simulation.jobs[task.job_id]
+                cur_job = self.simulation.jobs[task.job.id]
                 for cur_task_id in task.next_task_ids:
                     cur_task = cur_job.tasks[cur_task_id]
                     assigned_worker_id = task.ADFG[cur_task.task_id]
@@ -322,7 +322,7 @@ class HeftTaskWorker(TaskWorker):
         for element in prev_arrived_list:
             receive_time = max(receive_time, element[1])
         events.append(EventOrders(
-            receive_time, TaskArrival(self.simulation, self, cur_task, cur_task.job_id)))
+            receive_time, TaskArrival(self.simulation, self, cur_task, cur_task.job.id)))
         return events
     
     # ------------------------- queue history update helper functions ---------------

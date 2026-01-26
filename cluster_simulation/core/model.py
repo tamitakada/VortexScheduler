@@ -1,110 +1,13 @@
-from random import randint
-from core.configs.workflow_config import *
-import core.configs.gen_config as gcfg
-import core.configs.model_config as mcfg
-
-import scipy
-
-
 class Model:
     """
-    Description of Model
+    Instantiated Model. Multiple copies can be owned by one worker.
     """
 
-    def __init__(self, model_id: int, model_size: float, 
-                 batch_sizes: list[int], batch_exec_times: list[float], exec_time_cv: float):        
-        self.model_id = model_id
-        self.model_size = model_size
-        self.exec_time_cv = exec_time_cv
-
-        self.max_batch_size = batch_sizes[-1]
-        
-        # must at least have exec time data for bsize = 1
-        assert(1 in batch_sizes and len(batch_exec_times) >= 1)
-
-        self.batch_sizes = list(range(1, self.max_batch_size+1, 1))
-        self.batch_exec_times = {}
-
-        for size, exec_times in batch_exec_times.items():
-            # missing exec time data
-            assert(len(batch_sizes) <= len(exec_times))
-            
-            self.batch_exec_times[size] = []
-
-            if len(batch_sizes) > 1:
-                m, b, _, _, _ = scipy.stats.linregress(
-                    batch_sizes, 
-                    exec_times[:len(batch_sizes)])
-            else:
-                m = exec_times[0]
-                b = 0
-            
-            # missing exec times are filled with above regression
-            # TODO: mixing regression & provided data can lead to
-            # larger batch having lower exec time
-            for bsize in range(1, self.max_batch_size+1, 1):
-                if bsize in batch_sizes:
-                    self.batch_exec_times[size].append(exec_times[batch_sizes.index(bsize)])
-                else:
-                    self.batch_exec_times[size].append(m * bsize + b)
+    def __init__(self, id: str, model_data, created_at: float, active_from: float):        
+        self.id = id
+        self.data = model_data
+        self.created_at = created_at
+        self.active_from = active_from # time of fetch end, when model can be used
 
     def __hash__(self):
-        return hash(self.model_id)
-
-    def __eq__(self, other):
-        if isinstance(other, Model):
-            return self.model_id == other.model_id
-        return False
-
-    def __ne__(self, other):
-        return not (self == other)
-
-    def __str__(self):
-        return ("Model ID: "
-                + str(self.model_id)
-                + " (size:"
-                + str(self.model_size)
-                + "KB)")
-
-    def to_string(self):
-        return self.__str__()
-    
-    def get_exec_time(self, batch_size: int, partition_size: int) -> float:
-        """
-            Returns the execution time of a batch of [batch_size] on a partition of 
-            [partition_size] sampled from a Normal distribution with a CV of [self.cv].
-        """
-        exact_exec_time = self.batch_exec_times[partition_size][self.batch_sizes.index(batch_size)]
-        stddev = self.exec_time_cv * exact_exec_time
-        
-        randomized_time = np.random.normal(loc=exact_exec_time, scale=stddev, size=1)
-        while randomized_time <= 0:
-            randomized_time = np.random.normal(loc=exact_exec_time, scale=stddev, size=1)
-
-        return randomized_time[0]
-
-def parse_models_from_workflows() -> dict:
-    """
-    Helper function for Simulation: upon Resource Module initialization read "workflow.py" and extract how many models there are
-    Returns: {job_type_id1:[model1, model2 ...], job_type_id2:[]} a dict of model for different jobs
-    """
-    models = []
-    for i, model_config in enumerate(mcfg.MODELS):
-        models.append(Model(
-            model_id=i, 
-            model_size=model_config["MODEL_SIZE"],
-            batch_sizes=model_config["BATCH_SIZES"],
-            batch_exec_times=model_config["MIG_BATCH_EXEC_TIMES"],
-            exec_time_cv=model_config["EXEC_TIME_CV"]))
-
-    job_models_dict = dict()
-    for i, job in enumerate(WORKFLOW_LIST):
-        # print(job)
-        workflow_models = []
-        for task in WORKFLOW_LIST[i]["TASKS"]:
-            if task["MODEL_ID"] != -1:
-                workflow_models.append(models[task["MODEL_ID"]])
-        job_models_dict[job["JOB_TYPE"]] = models
-
-    # print(job_models_dict)
-    return job_models_dict
+        return hash(self.id)

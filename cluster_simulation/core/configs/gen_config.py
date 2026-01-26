@@ -1,29 +1,43 @@
 import numpy as np
 
+""" --------      Simulation Parameters      -------- """
+
+PRODUCE_EVENT_LOG = True
+
+# Runs a trace of produced event logs to verify simulator actions
+ENABLE_VERIFICATION = True
+
+# Print event details for every step of verifier trace
+ENABLE_VERIFICATION_DEBUG_LOGGING = True
 
 """ --------      Worker Machine Parameters      -------- """
 
 GPU_MEMORY_SIZE = 24000000  # in KB, 24GB for NVIDIA A30
-TOTAL_NUM_OF_NODES = 12
-MAX_NUM_NODES = 12
+MIN_NUM_NODES = 1
+MAX_NUM_NODES = 8
 VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
 
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    {1: {"NUM_JOBS": 2000,
-         "SEND_RATES": [6],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 507}}, #np.inf}},
-    {4: {"NUM_JOBS": 2000,
-         "SEND_RATES": [6],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 1727}},#np.inf}},
-    {5: {"NUM_JOBS": 2000,
-         "SEND_RATES": [6],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": 768}}#,np.inf}},
+    {0: {"NUM_JOBS": 10000,
+         "SEND_RATES": [55, 95],
+         "SEND_RATE_CHANGE_INTERVALS": [5000], 
+         "SLO": 1014}}, #np.inf}},
+
+    # {1: {"NUM_JOBS": 2000,
+    #      "SEND_RATES": [6],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": 507}}, #np.inf}},
+    # {4: {"NUM_JOBS": 2000,
+    #      "SEND_RATES": [6],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": 1727}},#np.inf}},
+    # {5: {"NUM_JOBS": 2000,
+    #      "SEND_RATES": [6],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": 768}}#,np.inf}},
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -54,11 +68,12 @@ BOOST_POLICY = "EDF"
 """ -------         Inferline Parameters  -------- """
 
 ESTIMATOR_CLIENT_CONFIGS = [ # in ms
-    {0: {"NUM_JOBS": 1200,
+    {0: {"NUM_JOBS": 1000,
          "SEND_RATES": [55, 95],
-         "SEND_RATE_CHANGE_INTERVALS": [600], 
+         "SEND_RATE_CHANGE_INTERVALS": [500], 
          "SLO": 1014}},
 ]
+INFERLINE_TUNING_INTERVAL = 15 * 1000 # ms
 
 """  -------        General Scheduling Parameters  --------- """
 
@@ -77,25 +92,13 @@ SLO_GRANULARITY = "JOB" # TASK | JOB
 ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
 
 # NONE | INFERLINE
-AUTOSCALING_POLICY = "NONE"
+AUTOSCALING_POLICY = "INFERLINE"
 
 # HERD | CUSTOM | INFERLINE
-ALLOCATION_STRATEGY = "CUSTOM" #"INFERLINE"
+ALLOCATION_STRATEGY = "INFERLINE"
 
 # [(partition size in GB, [model ids])]
-CUSTOM_ALLOCATION = [
- (12, [4]), (6, [5,13]), (6, [5,13]),
- (12, [6]), (12, [6]), 
- (12, [7]), (12, [7]), 
- (12, [7]), (12, [7]),
- (12, [8]), (12, [8]),
- (24, [9]), 
- (24, [9]), 
- (24, [9]), 
- (24, [9]),
- (24, [10]),
- (24, [10]),
- (24, [10])]
+CUSTOM_ALLOCATION = [(24, []), (24, []), (24, []), (24, [])]
 
 # 12-node mutlitenant ppl 2 (3 versions) alloc
 # [

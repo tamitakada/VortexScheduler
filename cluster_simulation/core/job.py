@@ -1,7 +1,6 @@
 from core.configs.workflow_config import *
-from core.model import *
-from core.task import *
-from core.workflow import Workflow
+from core.task import Task
+from core.data_models.workflow import Workflow
 
 class Job(object):
 
@@ -12,25 +11,22 @@ class Job(object):
 
         self.simulation = simulation
 
-        self.client_id = client_id
-        self.id = job_id    
-        self.job_type_id = workflow.id
+        self.client_id: int = client_id
+        self.id: int = job_id    
+        self.job_type_id: int = workflow.id
 
-        self.workflow = workflow
+        self.workflow: Workflow = workflow
 
-        self.tasks = []
+        self.tasks: list[Task] = []
         for _, at in sorted(self.workflow.tasks.items(), key=lambda item: item[0]):
             self.tasks.append(at.create_task(self))
         
         self.ADFG = {}     # Activated Dataflow Graph scheduled by scheduler. map: task_id->worker_id
-        # List containing which tasks tha constitute the job have been completed : [(task,timestamp),...]
-        self.completed_tasks = []
+        self.completed_tasks: list[int] = []
         
-        self.create_time = create_time  
-        self.end_time = create_time
-
-        self.slo = slo
-        self.job_deadline = self.create_time + self.slo
+        self.create_time: float = create_time  
+        self.end_time: float = create_time
+        self.slo: float = slo
 
     def __hash__(self):
         return hash(self.id)
@@ -44,7 +40,7 @@ class Job(object):
         return not (self == other)
 
     def __str__(self):
-        return "JobID: {}".format(self.id)
+        return f"[Workflow {self.job_type_id}] [Job {self.id}]"
 
     def get_min_remaining_processing_time(self, init_proc_times={}, batch_sizes={}) -> float:
         """
@@ -61,7 +57,7 @@ class Job(object):
                 return proc_times[target_task.task_id]
             else:
                 bsize = batch_sizes[target_task.task_id] if target_task.task_id in batch_sizes else 1
-                proc_time = target_task.model.batch_exec_times[24][target_task.model.batch_sizes.index(bsize)]
+                proc_time = target_task.model.data.batch_exec_times[24][bsize]
                 if target_task.required_task_ids:
                     proc_time += max(_get_min_proc_time([t for t in self.tasks if t.task_id == tid][0], proc_times) 
                                     for tid in target_task.required_task_ids)
@@ -101,7 +97,7 @@ class Job(object):
 
     def finished_task(self, task: Task) -> bool:
         for f_task in self.completed_tasks:
-            if task.job_id == self.id and task.task_id == f_task[0].task_id:
+            if task.job.id == self.id and task.task_id == f_task[0].task_id:
                 return True
         return False
     
