@@ -385,8 +385,9 @@ class Simulation(object):
                         "placed_or_evicted": "placed"
                     }
 
-            for model in self.workflows[0].get_models():
-                mcfg.MODELS[model.id]["MAX_BATCH_SIZE"] = self.models[mid].max_batch_size
+            for workflow in self.workflows.values():
+                for model in workflow.get_models():
+                    mcfg.MODELS[model.id]["MAX_BATCH_SIZE"] = self.models[model.id].max_batch_size
             
             self.herd_assignment = HerdAssignment(
                 [self.workers.values()],
