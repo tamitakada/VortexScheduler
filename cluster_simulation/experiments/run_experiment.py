@@ -10,8 +10,8 @@ from simulations.simulation_central import *
 from simulations.simulation_decentral import *
 from schedulers.algo.inferline_planner_algo import Inferline
 
-# from verification.autoscaling import AutoscalingVerifier
-# from verification.batch_execution_verifier import BatchExecutionVerifier
+from verification.autoscaling import AutoscalingVerifier
+from verification.batch_execution_verifier import BatchExecutionVerifier
 
 sys.dont_write_bytecode = True
 np.random.seed(42)
@@ -109,9 +109,9 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
                 f.write(alog)
                 f.close()
 
-    # if gcfg.ENABLE_VERIFICATION:
-    #     AutoscalingVerifier(sim).run_verifier()
-    #     BatchExecutionVerifier(sim).run_verifier()
+    if gcfg.ENABLE_VERIFICATION:
+        AutoscalingVerifier(sim).run_verifier()
+        BatchExecutionVerifier(sim).run_verifier()
 
 
 if __name__ == "__main__":
