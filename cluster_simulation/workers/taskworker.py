@@ -118,21 +118,16 @@ class TaskWorker(Worker):
         Send the result of a task to the next worker in the inference pipeline (it may be the same worker)
         """
         raise NotImplementedError()
+    
+    def get_avg_model_queue_len(self, time: float, model_id: int, info_staleness: float) -> float:
+        """Returns model queue length / model instance count.
+        """
+        snapshot_time = time - info_staleness
 
-    def get_task_queue_waittime(self, current_time, task_type, info_staleness=0, requiring_worker_id=None):
-        if requiring_worker_id != None and requiring_worker_id != self.id:
-            info_staleness = 0
-
-        task_model_id = WORKFLOW_LIST[task_type[0]]["TASKS"][task_type[1]]["MODEL_ID"]
-        if task_model_id < 0:
-            return 0
-        
-        task_model_states = list(filter(lambda s: s.model.model_id == task_model_id, 
-                                        self.GPU_state.placed_model_states(current_time)))
-        if len(task_model_states) == 0:
+        if not self.GPU_state.does_have_copy(model_id, snapshot_time):
             return np.inf
 
-        if self.GPU_state.does_have_idle_copy(task_model_states[0].model, current_time):
-            return 0
-        
-        return min(s.reserved_until for s in task_model_states) - current_time
+        task_queue = self.get_queue_history(snapshot_time, model_id)
+        num_instances = len([s for s in self.GPU_state.state_at(snapshot_time)
+                            if s.state in [ModelState.PLACED, ModelState.IN_FETCH] and s.model.data.id == model_id])
+        return len(task_queue) / num_instances

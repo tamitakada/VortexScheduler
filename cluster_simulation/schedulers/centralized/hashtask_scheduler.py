@@ -16,6 +16,7 @@ class HashTaskScheduler(Scheduler):
     def __init__(self, simulation, herd_assignment=None):
         super().__init__(simulation, herd_assignment)
 
+        # for round robin tracking
         self.last_worker_idx = {}
 
     def schedule_job_on_arrival(self, job, current_time):
@@ -51,21 +52,29 @@ class HashTaskScheduler(Scheduler):
     
     def _assign_adfg(self, tasks, current_time):
         for task in tasks:
-            candidate_worker_idx = 0
-            if task.model_data.id in self.last_worker_idx:
-                candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+            if gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
+                candidate_worker_idx = 0
+                if task.model_data.id in self.last_worker_idx:
+                    candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
 
-            candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
-
-            # don't choose worker without the required model
-            while task.model_data and \
-                all(s.model.data.id != task.model_data.id for s in
-                    self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
-
-                candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
                 candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+                # don't choose worker without the required model
+                while task.model_data and \
+                    all(s.model.data.id != task.model_data.id for s in
+                        self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
+
+                    candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
+                    candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+                self.last_worker_idx[task.model_data.id] = candidate_worker_idx
+
+            elif gcfg.DISPATCH_POLICY == "HEFT":
+                candidate_worker_id = min(self.simulation.worker_ids_by_creation,
+                                          key=lambda wid: self.simulation.workers[wid].get_avg_model_queue_len(
+                                            current_time, 
+                                            task.model_data.id,
+                                            info_staleness=gcfg.LOAD_INFORMATION_STALENESS))
 
             task.ADFG[task.task_id] = candidate_worker_id
             task.job.ADFG[task.task_id] = task.ADFG
-
-            self.last_worker_idx[task.model_data.id] = candidate_worker_idx

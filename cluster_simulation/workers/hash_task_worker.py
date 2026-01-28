@@ -216,24 +216,34 @@ class HashTaskWorker(TaskWorker):
             for i in range(0, len(ready_tasks), emit_size):
                 curr_send_batch = ready_tasks[i:(i+emit_size)]
 
-                # choose worker to assign next DAG tasks to round robin
-                candidate_worker_idx = random.randint(0, len(self.simulation.worker_ids_by_creation)-1)
-                if curr_send_batch[0].model_data.id in self.last_worker_idx:
-                    candidate_worker_idx = (self.last_worker_idx[curr_send_batch[0].model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
-                else:
-                    self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
+                if gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
+                    # choose worker to assign next DAG tasks to round robin
+                    candidate_worker_idx = random.randint(0, len(self.simulation.worker_ids_by_creation)-1)
+                    if curr_send_batch[0].model_data.id in self.last_worker_idx:
+                        candidate_worker_idx = (self.last_worker_idx[curr_send_batch[0].model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+                    else:
+                        self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
 
-                candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
-
-                # don't choose worker without the required model
-                while curr_send_batch[0].model_data and \
-                    all(s.model.data.id != curr_send_batch[0].model_data.id for s in
-                        self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
-                    
-                    candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
                     candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
 
-                self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
+                    # don't choose worker without the required model
+                    while curr_send_batch[0].model_data and \
+                        all(s.model.data.id != curr_send_batch[0].model_data.id for s in
+                            self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
+                        
+                        candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
+                        candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+                    self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
+
+                elif gcfg.DISPATCH_POLICY == "HEFT":
+                    candidate_worker_id = min(self.simulation.worker_ids_by_creation,
+                                              key=lambda wid: self.simulation.workers[wid].get_avg_model_queue_len(
+                                                  current_time, 
+                                                  curr_send_batch[0].model_data.id,
+                                                  info_staleness=0 if wid == self.id else gcfg.LOAD_INFORMATION_STALENESS))
+                else:
+                    raise ValueError("Unknown dispatch policy")
 
                 transfer_delay = 0
                 if candidate_worker_id != self.id:  # The next worker on the pipeline is NOT the same node
