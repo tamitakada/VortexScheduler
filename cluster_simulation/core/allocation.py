@@ -3,6 +3,7 @@ import core.configs.gen_config as gcfg
 
 from uuid import uuid4
 from copy import deepcopy
+from collections import Counter
 
 class AllocationUpdateStrategy:
     SORT_AND_PACK = 0
@@ -189,6 +190,41 @@ class ModelAllocation:
                     return [(worker_id, self.worker_cfgs[worker_id])]
             
             raise ValueError(f"No worker with model ID={model_id}")
+
+    def apply_delta(self, time: float, delta_worker_cfgs: list[tuple[str, tuple[int, list[int]]]]):
+        for (id, cfg) in delta_worker_cfgs:
+            if id in self.worker_cfgs and cfg: # change loaded models
+                new_models = Counter(cfg[1])
+                curr_models = Counter(self.worker_cfgs[id][1])
+                add_models = list((new_models - curr_models).elements())
+                rm_models = list((curr_models - new_models).elements())
+
+                for model_id in rm_models:
+                    self.model_ids.remove(model_id)
+
+                self.model_ids += add_models
+                self.worker_cfgs[id] = cfg
+                
+            elif id in self.worker_cfgs: # cfg=None -> rm worker
+                for model_id in self.worker_cfgs[id][1]:
+                    self.model_ids.remove(model_id)
+
+                self.worker_cfgs.pop(id)
+                
+                for i, (wid, _) in enumerate(self.worker_ids_by_create_time):
+                    if wid == id:
+                        self.worker_ids_by_create_time.pop(i)
+                        break
+            
+            else: # add worker
+                for model_id in cfg[1]:
+                    self.model_ids.append(model_id)
+
+                self.worker_cfgs[id] = cfg
+                self.worker_ids_by_create_time.append((id, time))
+
+        for model_id in self.models.keys():
+            self._check_model_count(model_id)
 
     def count(self, model_id: int) -> int:
         return self.model_ids.count(model_id)

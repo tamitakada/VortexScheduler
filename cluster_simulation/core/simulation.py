@@ -27,6 +27,7 @@ from workers.hash_task_worker import *
 from schedulers.algo.herd_algo import get_herd_assignment
 from schedulers.centralized.shepherd.herd_assignment import HerdAssignment
 from core.allocation import ModelAllocation
+from schedulers.algo.vortex_planner_algo import VortexPlanner
 
 import uuid
 
@@ -144,6 +145,17 @@ class Simulation(object):
 
             avg += get_sample(sample_start, sample_end)
         return avg / samples
+    
+    def get_arrival_rate(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_arrival_rate_at(start, end):
+            jobs = self.task_arrival_log[\
+                    (self.task_arrival_log["workflow_id"]==workflow_id) & \
+                    (self.task_arrival_log["time"] >= start) & \
+                    (self.task_arrival_log["time"] < end)]["job_id"].nunique()
+            return jobs / time_frame * 1000
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_arrival_rate_at)
 
     def get_drop_rate(self, time: float, workflow_id: int, time_frame: float, samples: int):
         def _get_drop_rate_at(start, end):
@@ -336,13 +348,24 @@ class Simulation(object):
         
         elif gcfg.ALLOCATION_STRATEGY == "INFERLINE":
             # TODO: add support for multitenant
+            assert(len(self.workflows) == 1)
             assert(len(gcfg.CLIENT_CONFIGS) == 1 and len(gcfg.CLIENT_CONFIGS[0].keys()) == 1)
 
             slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
             alloc = self.inferline.planner_minimize_cost(self, 0, self.workflows[0], slo)
-            print("ALLOCATION IS ", alloc.worker_cfgs)
 
             return alloc
+        
+        elif gcfg.ALLOCATION_STRATEGY == "VORTEX":
+            # NOTE: no support for multitenant yet
+            assert(len(self.workflows) == 1)
+            assert(len(gcfg.CLIENT_CONFIGS) == 1 and len(gcfg.CLIENT_CONFIGS[0].keys()) == 1)
+
+            slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
+            return VortexPlanner.get_allocation(self,
+                                                (gcfg.MIN_NUM_NODES + gcfg.MAX_NUM_NODES) // 2,
+                                                self.workflows[0],
+                                                slo)
             
         return None
     
@@ -473,7 +496,7 @@ class Simulation(object):
                     final_delta_workers[id] = cfg
                     self.last_scale = current_time
 
-            print("AFTER SCALE UPS: ", final_delta_workers)
+            # print("AFTER SCALE UPS: ", final_delta_workers)
 
             if current_time - self.last_scale > gcfg.INFERLINE_TUNING_INTERVAL:
                 # check scale down after all scale up checks to prevent removal
@@ -484,40 +507,55 @@ class Simulation(object):
                     for (id, cfg) in delta_workers:
                         final_delta_workers[id] = cfg
 
-                print("AFTER SCALE DOWNS: ", final_delta_workers)
-
-            events = []
-            for id, cfg in final_delta_workers.items():
-                if id in self.workers and cfg: # change loaded models
-                    new_models = Counter(cfg[1])
-                    curr_models = Counter([s.model.data.id for s in 
-                                           self.workers[id].GPU_state.state_at(current_time)])
-                    add_models = list((new_models - curr_models).elements())
-                    rm_models = list((curr_models - new_models).elements())
-                    
-                    events.append(EventOrders(
-                        current_time, 
-                        UpdateLoadedModelsEvent(
-                            self,
-                            self.workers[id],
-                            [self.models[mid] for mid in add_models],
-                            [self.models[mid] for mid in rm_models])))
-                elif id in self.workers: # cfg=None -> rm worker
-                    events.append(EventOrders(
-                        current_time,
-                        RemoveWorkerFromCluster(self, id)))
-                else: # add worker
-                    events.append(EventOrders(
-                        current_time,
-                        AddWorkerToCluster(self, id, cfg[0], cfg[1])))
-
-            if not events:
-                print("No allocation changes required")
-
-            assert(self.allocation.count(m.id) > 0 for w in self.workflows.values() for m in w.get_models())
-            return events
+                # print("AFTER SCALE DOWNS: ", final_delta_workers)
         
-        return []
+        elif gcfg.AUTOSCALING_POLICY == "VORTEX":
+            if current_time <= 5000 or current_time - self.last_scale <= 5000:
+                return []
+
+            self.last_scale = current_time
+
+            ar = self.get_arrival_rate(current_time, 
+                                       self.workflows[0].id, 
+                                       5 * 1000,
+                                       1)
+            slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
+            delta_workers = VortexPlanner.check_scale(current_time, self, self.workflows[0], slo, self.allocation, ar)
+            final_delta_workers = {delta_cfg[0]: delta_cfg[1] for delta_cfg in delta_workers}
+
+            # print("AR: ", ar)
+            # print("DIFFS: ", final_delta_workers)
+
+        events = []
+        for id, cfg in final_delta_workers.items():
+            if id in self.workers and cfg: # change loaded models
+                new_models = Counter(cfg[1])
+                curr_models = Counter([s.model.data.id for s in 
+                                        self.workers[id].GPU_state.state_at(current_time)])
+                add_models = list((new_models - curr_models).elements())
+                rm_models = list((curr_models - new_models).elements())
+                
+                events.append(EventOrders(
+                    current_time, 
+                    UpdateLoadedModelsEvent(
+                        self,
+                        self.workers[id],
+                        [self.models[mid] for mid in add_models],
+                        [self.models[mid] for mid in rm_models])))
+            elif id in self.workers: # cfg=None -> rm worker
+                events.append(EventOrders(
+                    current_time,
+                    RemoveWorkerFromCluster(self, id)))
+            else: # add worker
+                events.append(EventOrders(
+                    current_time,
+                    AddWorkerToCluster(self, id, cfg[0], cfg[1])))
+
+        if not events:
+            print("No allocation changes required")
+
+        assert(self.allocation.count(m.id) > 0 for w in self.workflows.values() for m in w.get_models())
+        return events
 
     
     """

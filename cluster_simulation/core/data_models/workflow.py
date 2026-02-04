@@ -42,6 +42,10 @@ class Workflow:
         """
         return list(set([task.model_data for task in self.tasks.values() if task.model_data]))
     
+    def get_min_processing_time(self) -> float:
+        return self.get_processing_time(
+            lambda t: t.model_data.batch_exec_times[24][1])
+
     def get_processing_time(self, get_exec_time) -> float:
         dependencies: dict[int, set[int]] = {}
         dependents: dict[int, set[int]] = {}
