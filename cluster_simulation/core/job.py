@@ -57,7 +57,7 @@ class Job(object):
                 return proc_times[target_task.task_id]
             else:
                 bsize = batch_sizes[target_task.task_id] if target_task.task_id in batch_sizes else 1
-                proc_time = target_task.model.data.batch_exec_times[24][bsize]
+                proc_time = target_task.model_data.batch_exec_times[24][bsize]
                 if target_task.required_task_ids:
                     proc_time += max(_get_min_proc_time([t for t in self.tasks if t.task_id == tid][0], proc_times) 
                                     for tid in target_task.required_task_ids)

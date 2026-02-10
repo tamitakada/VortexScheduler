@@ -485,7 +485,10 @@ class Simulation(object):
                     job_id += 1
 
     def scale_cluster(self, current_time):
-        if gcfg.AUTOSCALING_POLICY == "INFERLINE":
+        if gcfg.AUTOSCALING_POLICY == "NONE":
+            return []
+
+        elif gcfg.AUTOSCALING_POLICY == "INFERLINE":
             print(f"{current_time} Running InferLine autoscaler...")
 
             final_delta_workers = {}
