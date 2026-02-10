@@ -14,6 +14,7 @@ from core.batch import Batch
 from schedulers.algo.batching_policies import get_batch
 
 import random
+import math
 
 
 class HashTaskWorker(TaskWorker):
@@ -120,6 +121,120 @@ class HashTaskWorker(TaskWorker):
         return events
 
     #  --------------------------- DECENTRALIZED WORKER SCHEDULING  ----------------------
+
+    def drop_tasks(self, current_time: float):
+        for model_id in self.queue_history.keys():
+            task_queue = self.get_queue_history(current_time, model_id, info_staleness=0)
+            for task in task_queue:
+                # skip dropped tasks
+                if (self.simulation.task_drop_log["job_id"]==task.job.id).any():
+                    self.rm_task_in_queue_history(task, current_time)
+                    continue
+
+                if (gcfg.DROP_POLICY == "LATEST_POSSIBLE" and current_time >= task.get_task_deadline()) or \
+                   (gcfg.DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task.get_task_deadline()):
+                    
+                    for job_task in task.job.tasks:
+                        self.rm_task_in_queue_history(job_task, current_time)
+                    
+                    self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
+                        "client_id": task.job.client_id,
+                        "job_id": task.job.id, 
+                        "workflow_id": task.job.job_type_id, 
+                        "task_id": task.task_id,
+                        "drop_time": current_time, 
+                        "create_time": task.log.job_creation_timestamp,
+                        "arrival_time": task.log.task_placed_on_worker_queue_timestamp,
+                        "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
+                        "deadline": task.get_task_deadline()
+                    }
+                    continue
+    
+    def check_preemption(self, model_id: int, current_time: float) -> list[EventOrders]:
+        if gcfg.BATCH_POLICY != "OPT_PREEMPT":
+            return []
+        
+        if current_time <= 2000:
+            return []
+        
+        avg_bsizes_by_model = {}
+        for model_id in self.simulation.batch_exec_log["model_id"].unique():
+            print(model_id)
+            bsizes = self.simulation.batch_exec_log[\
+                (self.simulation.batch_exec_log["model_id"]==model_id) & \
+                (self.simulation.batch_exec_log["start_time"]>(current_time - 2000))]["batch_size"]
+            if len(bsizes) <= 1: # not enough data
+                return []
+            
+            avg_bsizes_by_model[model_id] = math.floor(bsizes.median())
+        
+        print("AVG SIZES: ", avg_bsizes_by_model)
+
+        task_queue = [task for task in self.get_queue_history(current_time, model_id, info_staleness=0)
+                      if current_time >= task.log.task_placed_on_worker_queue_timestamp]
+        
+        model_states = [s for s in self.GPU_state.state_at(current_time) if s.model.data.id == model_id]
+        for state in model_states:
+            assert(state.reserved_batch)
+
+            est_batch_time = \
+                state.reserved_batch.model_data.batch_exec_times[self.total_memory][state.reserved_batch.size()] - \
+                (current_time - state.reserve_from)
+
+            # add curr executing tasks to queue to consider for preempted batch
+            for batched_task in state.reserved_batch.tasks:
+                task_queue.append(batched_task)
+            task_queue = sorted(task_queue, key=lambda t: t.get_task_deadline())
+
+            batch = get_batch(current_time, self.total_memory, task_queue)
+            if batch.size() <= state.reserved_batch.size():
+                continue # if new batch is not larger, don't preempt
+            
+            # calculate trade off
+            dropped_under_preempt = 0
+            for batched_task in state.reserved_batch.tasks:
+                if batched_task not in batch.tasks:
+                    dropped_under_preempt += 1
+            
+            dropped_no_preempt = 0
+            for task in batch.tasks:
+                if task not in state.reserved_batch.tasks:
+                    order = task_queue.index(task) - state.reserved_batch.size()
+                    batch_exec_time = state.reserved_batch.model_data.batch_exec_times[self.total_memory][avg_bsizes_by_model[task.model_data.id]]
+                    est_task_time = est_batch_time + (order // avg_bsizes_by_model[task.model_data.id] + 1) * batch_exec_time
+                    est_job_time = task.job.get_min_remaining_processing_time(
+                        init_proc_times={task.task_id: est_task_time}, 
+                        batch_sizes={avg_bsizes_by_model[job_task.model_data.id]
+                                     for job_task in task.job.tasks})
+                    # print("EST END: ", current_time + est_job_time)
+                    # print("DDL: ", task.get_task_deadline())
+                    # print()
+                    if current_time + est_job_time > task.get_task_deadline():
+                        dropped_no_preempt += 1
+            
+            # preempt IFF predicted drops strictly greater w/out preemption
+            if dropped_no_preempt > dropped_under_preempt:
+                print(f"M{model_id}:\n\tCURR IS {state.reserved_batch}\n\tNEW IS {batch}")
+
+                # assert(False)
+
+                evicted_batch = self.evict_batch(state.reserved_batch.id, current_time)
+                events, _ = self.batch_execute(batch, current_time)
+                assert(events)
+
+                for task in batch.tasks:
+                    self.rm_task_in_queue_history(task, current_time)
+
+                evicted_tasks = [t for t in evicted_batch.tasks if t not in batch.tasks]
+                for task in evicted_tasks:
+                    self.add_task_to_queue_history(task, current_time)                
+                
+                # if evicted_tasks:
+                #     events.append(EventOrders(
+                #         current_time + CPU_to_CPU_delay(sum(t.input_size for t in evicted_tasks)), 
+                #         TasksArrivalAtScheduler(self.simulation, evicted_tasks)))
+                return events
+        return []
     
     def check_task_queue(self, model_id: int, current_time: float) -> list[EventOrders]:
         """Launch up to 1 new batch for a given model drawing from tasks in
@@ -133,42 +248,14 @@ class HashTaskWorker(TaskWorker):
             events: Batch start and end events if batch is launched,
             otherwise empty.
         """
-        model_state = [s for s in self.GPU_state.state_at(current_time)
-                       if s.model.data.id == model_id]
-        
+        self.drop_tasks(current_time) # drop tasks if necessary
+
+        model_state = [s for s in self.GPU_state.state_at(current_time) if s.model.data.id == model_id]
         assert(len(model_state) >= 1)
 
         if all(s.reserved_batch for s in model_state):
-            return []
+            return self.check_preemption(model_id, current_time)
 
-        # drop tasks if necessary
-        task_queue = self.get_queue_history(current_time, model_id, info_staleness=0)
-        for task in task_queue:
-            # skip dropped tasks
-            if (self.simulation.task_drop_log["job_id"]==task.job.id).any():
-                self.rm_task_in_queue_history(task, current_time)
-                continue
-
-            if ((gcfg.DROP_POLICY == "LATEST_POSSIBLE" or gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT") and current_time >= task.get_task_deadline()) or \
-                (gcfg.DROP_POLICY == "OPTIMAL" and (current_time + task.job.get_min_remaining_processing_time()) >= task.get_task_deadline()):
-                
-                for job_task in task.job.tasks:
-                    self.rm_task_in_queue_history(job_task, current_time)
-                
-                self.simulation.task_drop_log.loc[len(self.simulation.task_drop_log)] = {
-                    "client_id": task.job.client_id,
-                    "job_id": task.job.id, 
-                    "workflow_id": task.task_type[0], 
-                    "task_id": task.task_type[1],
-                    "drop_time": current_time, 
-                    "create_time": task.log.job_creation_timestamp,
-                    "arrival_time": task.log.task_placed_on_worker_queue_timestamp,
-                    "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
-                    "deadline": task.get_task_deadline()
-                }
-                continue
-        
-        # get queue after drops
         task_queue = [task for task in self.get_queue_history(current_time, model_id, info_staleness=0)
                       if current_time >= task.log.task_placed_on_worker_queue_timestamp]
         

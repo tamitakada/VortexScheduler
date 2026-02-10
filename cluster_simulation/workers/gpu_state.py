@@ -298,12 +298,14 @@ class GPUState(object):
 
         reserved_instance = min(idle_instances, key=lambda s: s.model.active_from)
         reserve_until = max(reserved_instance.model.active_from, time) + reserve_for
+        reserve_from = max(reserved_instance.model.active_from, time)
 
         def _occupy_one_copy(timestamp, states):
             for j, state in enumerate(states):
                 if state.model.id == reserved_instance.model.id:
                     states[j].reserved_batch = reserved_batch
                     states[j].reserved_until = reserve_until
+                    states[j].reserve_from = reserve_from
                     return
             assert(False)
 
