@@ -79,6 +79,10 @@ class Simulation(object):
         self.worker_log = pd.DataFrame(columns=["time", "add_or_remove", "worker_id"])
         self.worker_model_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "model_id", "instance_id", "placed_or_evicted"])
 
+        # admission control logs
+        self.tput_gput_log = pd.DataFrame(columns=["time", "workflow_id", "ar", "tput", "gput"])
+        self.limit_log = pd.DataFrame(columns=["time", "workflow_id", "limit"])
+
         self.allocation_logs = []
 
         print("---- SIMULATION : " + self.simulation_name + "----")
@@ -170,9 +174,9 @@ class Simulation(object):
     
     def get_throughput(self, time: float, workflow_id: int, time_frame: float, samples: int):
         def _get_tput_at(start, end):
-            complete_jobs = ((self.task_exec_log["workflow_id"]==workflow_id) & \
+            complete_jobs = self.task_exec_log[(self.task_exec_log["workflow_id"]==workflow_id) & \
                             (self.task_exec_log["exec_end_time"] >= start) & \
-                            (self.task_exec_log["exec_end_time"] < end)).sum()
+                            (self.task_exec_log["exec_end_time"] < end)]["job_id"].nunique()
             tput = complete_jobs / time_frame * 1000
             return tput
         
@@ -181,10 +185,10 @@ class Simulation(object):
     
     def get_goodput(self, time: float, workflow_id: int, time_frame: float, samples: int):
         def _get_gput_at(start, end):
-            nontardy_jobs = ((self.task_exec_log["workflow_id"]==workflow_id) & \
+            nontardy_jobs = self.task_exec_log[(self.task_exec_log["workflow_id"]==workflow_id) & \
                             (self.task_exec_log["exec_end_time"] >= start) & \
                             (self.task_exec_log["exec_end_time"] < end) & \
-                            (self.task_exec_log["exec_end_time"] < self.task_exec_log["deadline"])).sum()
+                            (self.task_exec_log["exec_end_time"] <= self.task_exec_log["deadline"])]["job_id"].nunique()
             gput = nontardy_jobs / time_frame * 1000
             return gput
         
@@ -446,7 +450,7 @@ class Simulation(object):
         """Initializes Workflow objects for all job types in [self.job_types_list].
         """
         return {
-            cfg["JOB_TYPE"] : Workflow(self, cfg) for cfg in WORKFLOW_LIST
+            cfg["JOB_TYPE"] : Workflow(cfg, self.models, gcfg.SLO_GRANULARITY) for cfg in WORKFLOW_LIST
             if cfg["JOB_TYPE"] in self.job_types_list}
             
     def generate_all_jobs(self):

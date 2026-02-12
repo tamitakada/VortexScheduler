@@ -19,7 +19,48 @@ class HashTaskScheduler(Scheduler):
         # for round robin tracking
         self.last_worker_idx = {}
 
+        self.last_change = 0
+
     def schedule_job_on_arrival(self, job, current_time):
+        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
+            if current_time > 3000:
+                curr_ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 1)
+                ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 3)
+                tput = self.simulation.get_throughput(current_time, job.job_type_id, 1000, 3)
+                gput = self.simulation.get_goodput(current_time, job.job_type_id, 1000, 3)
+
+                self.simulation.tput_gput_log.loc[len(self.simulation.tput_gput_log)] = [current_time, job.job_type_id, ar, tput, gput]
+
+                relevant_limits = self.simulation.limit_log[self.simulation.limit_log["workflow_id"]==job.job_type_id]
+                
+                sys_limit = -1 if len(relevant_limits) == 0 else relevant_limits.loc[relevant_limits["time"].idxmax(), "limit"]
+
+                if sys_limit <= 0 or (self.last_change >= 0 and current_time - self.last_change > 1000 and ar < sys_limit): 
+                    if ar - tput > 3:
+                        sys_limit = ar - 0.25 * (ar - tput)
+                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
+                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
+                        self.last_change = -1
+                    elif tput - gput > 3:
+                        sys_limit = ar - 0.25 * (ar - gput)
+                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
+                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
+                        self.last_change = -1
+                
+                # set last_change = first time arrival rate is detected to have responded to latest system limit
+                if curr_ar < sys_limit and self.last_change < 0:
+                    self.last_change = current_time
+        
+                if sys_limit > 0 and curr_ar > sys_limit:
+                    return [EventOrders(
+                        current_time, 
+                        SchedulerDropJob(
+                            self.simulation, 
+                            job, 
+                            job.tasks[0], 
+                            job.create_time + job.slo,
+                            reason=SchedulerDropJob._ARRIVAL_RATE_CAP))]
+
         super().schedule_job_on_arrival(job, current_time)
 
         self._assign_adfg(job.tasks, current_time)

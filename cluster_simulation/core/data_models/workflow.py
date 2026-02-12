@@ -1,7 +1,6 @@
 from core.data_models.model_data import ModelData
 from core.data_models.task_data import TaskData
-from core.configs.workflow_config import *
-import core.configs.gen_config as gcfg
+from core.allocation import ModelAllocation
 
 
 class Workflow:
@@ -9,7 +8,7 @@ class Workflow:
     Represents a DAG pipeline.
     """
 
-    def __init__(self, simulation, workflow_cfg):
+    def __init__(self, workflow_cfg, models, slo_granularity):
         self.id = workflow_cfg["JOB_TYPE"]
         
         self.initial_tasks: list[TaskData] = []
@@ -17,12 +16,12 @@ class Workflow:
         for cfg in workflow_cfg["TASKS"]:
             task = TaskData(
                 cfg["TASK_INDEX"],
-                simulation.models[cfg["MODEL_ID"]],
+                models[cfg["MODEL_ID"]],
                 cfg["INPUT_SIZE"],
                 cfg["OUTPUT_SIZE"],
                 cfg["MAX_WAIT_TIME"],
                 cfg["MAX_EMIT_BATCH_SIZE"],
-                cfg["SLO"] if gcfg.SLO_GRANULARITY == "TASK" else None)
+                cfg["SLO"] if slo_granularity == "TASK" else None)
             
             self.tasks[task.id] = task
 
@@ -42,6 +41,49 @@ class Workflow:
         """
         return list(set([task.model_data for task in self.tasks.values() if task.model_data]))
     
+    def get_max_batch_sizes(self, allocation: ModelAllocation, arrival_rate: float) -> dict[int, int]:
+        throughputs = {} # task ID -> max throughput
+        max_batch_sizes = {}
+        completed_tasks = set()
+        available_tasks = [t for t in self.initial_tasks]
+        remaining_tasks = [t for t in self.tasks.values()]
+
+        # 1) best achievable throughput given arrival rate per step
+        # 2) 
+
+        while remaining_tasks:
+            for task in available_tasks:
+                model_count = allocation.count(task.model_data.id)
+                
+                total_input_rate = min(throughputs[t.id] for t in task.prev_tasks) \
+                    if task.prev_tasks else arrival_rate
+                input_rate = total_input_rate / model_count
+                refill_time = 1 / input_rate * 1000
+
+                for bsize in range(allocation.models[task.model_data.id].max_batch_size, -1, -1):
+                    bexec_time = allocation.models[task.model_data.id].batch_exec_times[24][bsize]
+                    if bexec_time / refill_time < bsize: # doesn't refill fast enough to regularly run this size
+                        break
+                
+                
+
+                
+                expected_bsize = max(b for b in range(1, allocation.models[task.model_data.id].max_batch_size+1, 1) 
+                                        if b == 1 or input_rate >= b / task.model_data.batch_exec_times[24][b] * 1000)
+                throughputs[task.id] = min(input_rate, expected_bsize / task.model_data.batch_exec_times[24][expected_bsize] * 1000) * model_count
+                
+                print("IN: ", input_rate, " OUT: ", throughputs[task.id], " COUNT: ", model_count)
+
+                remaining_tasks.remove(task)
+                completed_tasks.add(task.id)
+
+            max_throughput = min(throughputs[t.id] for t in available_tasks)
+
+            available_tasks = []
+            for task in remaining_tasks:
+                if all(t.id in completed_tasks for t in task.prev_tasks):
+                    available_tasks.append(task)  
+
     def get_min_processing_time(self) -> float:
         return self.get_processing_time(
             lambda t: t.model_data.batch_exec_times[24][1])
