@@ -35,6 +35,15 @@ class TaskData:
         
         return True
     
+    def __hash__(self):
+        return hash((self.id, self.model_data.id))
+    
+    def __str__(self):
+        return f"[TaskData ID: {self.id}, Model ID: {self.model_data.id}]"
+
+    def __repr__(self):
+        return self.__str__()
+    
     def create_task(self, job) -> Task:
         task = Task(job,
                     self.id,

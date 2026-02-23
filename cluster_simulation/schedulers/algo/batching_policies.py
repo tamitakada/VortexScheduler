@@ -57,12 +57,12 @@ def get_batch(time: float, partition_size: int, task_queue: list[Task], preserve
                 # than tasks that were chosen for the batch
                 # or, for optimal policy, inlcuding the task would cause an SLO violation for this batch size
 
-                latest_deadline = max([t.job.create_time + t.job.slo for t in batch.tasks])
+                latest_deadline = max([t.get_task_deadline() for t in batch.tasks])
 
                 if gcfg.BATCH_POLICY == "LARGEST":
-                    assert(all([t.job.create_time + t.job.slo >= latest_deadline for t in nonbatched_tasks]))
+                    assert(all([t.get_task_deadline() >= latest_deadline for t in nonbatched_tasks]))
                 elif gcfg.BATCH_POLICY in ["OPTIMAL", "OPT_PREEMPT"]:
-                    assert(all([t.job.create_time + t.job.slo >= latest_deadline or \
+                    assert(all([t.get_task_deadline() >= latest_deadline or \
                                 t.get_task_deadline() < time + t.model_data.batch_exec_times[partition_size][batch.size()] 
                                 for t in nonbatched_tasks]))
 
