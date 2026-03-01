@@ -8,7 +8,7 @@ from schedulers.algo.herd_algo import *
 
 from schedulers.centralized.hashtask_scheduler import HashTaskScheduler
 # from schedulers.centralized.heft_scheduler import HeftScheduler
-# from schedulers.centralized.shepherd.shepherd_scheduler import ShepherdScheduler
+from schedulers.centralized.shepherd.shepherd_scheduler import ShepherdScheduler
 from schedulers.centralized.nexus_scheduler import NexusScheduler
 
 
@@ -33,8 +33,8 @@ class Simulation_central(Simulation):
             self.scheduler = HashTaskScheduler(self, self.herd_assignment)
         # elif self.simulation_name == "centralheft":
         #     self.scheduler = HeftScheduler(self, self.herd_assignment)
-        # elif self.simulation_name == "shepherd":
-        #     self.scheduler = ShepherdScheduler(self, self.herd_assignment)
+        elif self.simulation_name == "shepherd":
+            self.scheduler = ShepherdScheduler(self, self.herd_assignment)
         elif self.simulation_name == "nexus":
             self.scheduler = NexusScheduler(self, self.herd_assignment)
 
@@ -56,17 +56,9 @@ class Simulation_central(Simulation):
             self.remaining_jobs -= 1
 
     def run(self):
-        print("CONFIGS: =====================")
-        print(gcfg.CLIENT_CONFIGS)
-        print()
-        print(gcfg.CUSTOM_ALLOCATION)
-        print()
-        print([(m["MAX_BATCH_SIZE"]) for m in mcfg.MODELS])
-        print()
-
         self.generate_all_jobs()
 
-        self.event_queue.put(EventOrders(500, SampleWorkerMetrics(self)))
+        # self.event_queue.put(EventOrders(500, SampleWorkerMetrics(self)))
 
         last_time = 0
         while self.event_queue.qsize() > 0:

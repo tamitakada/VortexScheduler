@@ -135,29 +135,31 @@ class BatchArrivalAtWorker(Event):
     Event signifying that a batch of tasks arrived for execution at a worker.
     """
 
-    def __init__(self, simulation, worker, batch):
+    def __init__(self, simulation, worker, batch, instance_id):
         self.simulation = simulation
         self.worker = worker
         self.batch = batch
+        self.instance_id = instance_id
 
     def run(self, current_time):
-        self.batch.tasks = [task for task in self.batch.tasks 
-                            if not (self.simulation.task_drop_log["job_id"] == task.job.id).any()]
-        if (not self.worker.GPU_state.does_have_idle_copy(self.batch.model_data.id, current_time)) or \
-            (not gcfg.ENABLE_MULTITHREADING and any(s.reserved_batch for s in self.worker.GPU_state.state_at(current_time))) or \
-                self.worker.did_abandon_batch(self.batch.id) or self.batch.size() == 0:
-            current_batches = [s.reserved_batch for s in self.worker.GPU_state.state_at(current_time) if s.reserved_batch]
-            transfer_delay = CPU_to_CPU_delay(self.batch.size()*self.batch.tasks[0].input_size) if self.batch.size() > 0 else 0
-            return [EventOrders(current_time + transfer_delay, 
-                                BatchRejectionAtWorker(self.simulation, self.worker, self.batch,
-                                                       current_worker_batch=(current_batches[0] if current_batches else None)))]
+        curr_batch = self.worker.GPU_state.get_instance_state(self.instance_id, current_time).reserved_batch
+        if curr_batch or self.worker.did_abandon_batch(self.batch.id):
+            return [EventOrders(
+                current_time,
+                BatchRejectionAtWorker(self.simulation,
+                                       self.worker,
+                                       self.batch,
+                                       current_worker_batch=curr_batch))]
+
         for task in self.batch.tasks:
             task.log.set_task_placed_on_worker_queue_timestamp(current_time)
             self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
-        return self.worker.maybe_start_batch(self.batch, current_time)
+        
+        events, _ = self.worker.batch_execute(self.batch, current_time, instance_id=self.instance_id)
+        return events
 
     def to_string(self):
-        return f"[Batch {self.batch.id} Arrival at Worker {self.worker.id} (Type: {self.batch.tasks[0].task_type}, Job IDs: {self.batch.job_ids})] ++"
+        return f"[Batch {self.batch.id} Arrival at Worker {self.worker.id} (Instance: {self.instance_id}, Job IDs: {self.batch.job_ids})] ++"
     
     def is_worker_event():
         return True
@@ -168,18 +170,20 @@ class BatchRejectionAtWorker(Event):
     the batch has been sent back to the Centralized scheduler for rescheduling.
     """
 
-    def __init__(self, simulation, worker, batch, current_worker_batch=None):
+    def __init__(self, simulation, worker, batch, instance_id, current_worker_batch=None):
         self.simulation = simulation
         self.worker = worker
         self.batch = batch
+        self.instance_id = instance_id
         self.current_worker_batch = current_worker_batch
 
     def run(self, current_time):
         if self.simulation.simulation_name == "shepherd":
-            self.simulation.scheduler.worker_rejected_batch(self.worker.id, self.batch, self.current_worker_batch)
-        if self.batch.size() == 0:
-            return [] # possible if all tasks were dropped
-        return [EventOrders(current_time, TasksArrivalAtScheduler(self.simulation, self.batch.tasks))] # reschedule batch
+            self.simulation.scheduler.worker_instance_to_batch[\
+                (self.worker.id, self.instance_id)] = self.current_worker_batch
+            
+        return [EventOrders(current_time, 
+                            TasksArrivalAtScheduler(self.simulation, self.batch.tasks))] # reschedule batch
 
     def to_string(self):
         return f"[Batch {self.batch.id} Sent Back by Worker {self.worker.id}]"
@@ -193,37 +197,20 @@ class BatchPreemptionScheduledAtWorker(Event):
     Event signifying that a batch should be preempted at a worker.
     """
 
-    def __init__(self, simulation, worker, batch, old_batch_id):
+    def __init__(self, simulation, worker, instance_id, batch, old_batch_id):
         self.simulation = simulation
         self.worker = worker
         self.batch = batch # replacement batch
         self.old_batch_id = old_batch_id # preempted batch
+        self.instance_id = instance_id
 
     def run(self, current_time):
-        self.batch.tasks = [task for task in self.batch.tasks 
-                            if not (self.simulation.task_drop_log["job_id"] == task.job.id).any()]
+        for task in self.batch.tasks:
+            task.log.set_task_placed_on_worker_queue_timestamp(current_time)
+            self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
 
-        # check if batch to be preempted still exists/is actively executing
-        old_batch = [s.reserved_batch for s in self.worker.GPU_state.state_at(current_time)
-                     if s.reserved_batch and s.reserved_batch.id == self.old_batch_id]
-        if len(self.batch.tasks) > 0 and old_batch:
-            old_batch = old_batch[0]
-
-            for task in self.batch.tasks:
-                task.log.set_task_placed_on_worker_queue_timestamp(current_time)
-                self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
-
-            return self.worker.preempt_batch(self.old_batch_id, self.batch, current_time)
-        else:
-            # NOTE: marks as abandoned anyway in case prior assigned batch has not yet arrived
-            self.worker._abandoned_batches.append(self.old_batch_id)
-            # if outdated decision, or all batch tasks were dropped, send back tasks for rescheduling
-            current_batches = [s.reserved_batch for s in self.worker.GPU_state.state_at(current_time) if s.reserved_batch]
-            return [EventOrders(
-                current_time + (0 if self.batch.size() == 0 else CPU_to_CPU_delay(self.batch.size()*self.batch.tasks[0].input_size)),
-                BatchRejectionAtWorker(self.simulation, self.worker, self.batch, 
-                                       current_worker_batch=(current_batches[0] if current_batches else None)))]
-    
+        return self.worker.preempt_batch(self.instance_id, self.old_batch_id, self.batch, current_time)
+       
     def to_string(self):
         return f"[Batch Preemption Scheduled at Worker {self.worker.id} (Batch {self.old_batch_id} to be preempted)]"
     

@@ -389,7 +389,12 @@ class Simulation(object):
             self.worker_ids_by_creation = []
             for (wid, _) in self.allocation.worker_ids_by_create_time:
                 cfg = self.allocation.worker_cfgs[wid]
-                worker = HashTaskWorker(self, wid, cfg[0], created_at=0)
+
+                if self.simulation_name == "shepherd":
+                    worker = ShepherdWorker(self, wid, cfg[0], created_at=0)
+                else:
+                    worker = HashTaskWorker(self, wid, cfg[0], created_at=0)
+                
                 self.workers[wid] = worker
                 self.worker_ids_by_creation.append(wid)
 

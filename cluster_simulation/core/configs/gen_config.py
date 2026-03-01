@@ -5,7 +5,9 @@ import numpy as np
 PRODUCE_EVENT_LOG = True
 
 # Runs a trace of produced event logs to verify simulator actions
-ENABLE_VERIFICATION = False
+ENABLE_VERIFICATION = True
+ENABLE_TRACE_VERIFICATION = False
+VERIFICATION_WINDOW_SIZE = 5000 # only process up to this many events (don't do full trace)
 
 # Print event details for every step of verifier trace
 ENABLE_VERIFICATION_DEBUG_LOGGING = True
@@ -23,22 +25,22 @@ MAX_NUM_MODELS_PER_NODE = 4
 
 CLIENT_CONFIGS = [ # in ms
     # {0: {"NUM_JOBS": 10000,
-    #      "SEND_RATES": [95, 55],
-    #      "SEND_RATE_CHANGE_INTERVALS": [5000], 
-    #      "SLO": 1014}}, #np.inf}},
+    #      "SEND_RATES": [125],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": 507}} #1014}}, #np.inf}},
 
     {1: {"NUM_JOBS": 5000,
-         "SEND_RATES": [12],
+         "SEND_RATES": [20],#[12],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}},
+         "SLO": int(256.3*2)}},
     {4: {"NUM_JOBS": 5000,
-         "SEND_RATES": [12],
+         "SEND_RATES": [8],#[12],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}},
+         "SLO": int(787.2*2)}},
     {5: {"NUM_JOBS": 5000,
-         "SEND_RATES": [12],
+         "SEND_RATES": [12],#[12],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}},
+         "SLO": int(388.7*2)}},
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -64,7 +66,7 @@ HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
 # JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
-BOOST_POLICY = "FCFS"
+BOOST_POLICY = "EDF"
 
 """ -------         Inferline Parameters  -------- """
 
@@ -81,16 +83,16 @@ ENABLE_ESTIMATOR_LOGGING = False
 """  -------        General Scheduling Parameters  --------- """
 
 # ROUND_ROBIN | HEFT
-DISPATCH_POLICY = "HEFT"
+DISPATCH_POLICY = "ROUND_ROBIN" #"HEFT"
 
 # OPTIMAL | LARGEST
 # [OPTIMAL] Largest batch for which all task SLOs are met
 # [LARGEST] Largest batch <= model max batch size
-BATCH_POLICY = "LARGEST"
+BATCH_POLICY = "OPTIMAL"
 FALLBACK_TO_LARGEST_BATCH = True
 
-# OPTIMAL | LATEST_POSSIBLE | NONE
-DROP_POLICY = "NONE"
+# OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
+DROP_POLICY = "LATEST_POSSIBLE"
 
 SLO_SLACK = 0
 SLO_GRANULARITY = "JOB" # TASK | JOB
@@ -117,6 +119,7 @@ CUSTOM_ALLOCATION = [
  (24, [10]),
  (24, [10]),
  (24, [10])]
+
 
 # 12-node mutlitenant ppl 2 (3 versions) alloc
 # [

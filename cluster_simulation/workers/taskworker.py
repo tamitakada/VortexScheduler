@@ -63,7 +63,7 @@ class TaskWorker(Worker):
         
         return []
 
-    def batch_execute(self, batch: Batch, current_time: float):
+    def batch_execute(self, batch: Batch, current_time: float, instance_id=None):
         """
             Fetches a new copy or reserves an idle copy of any required GPU models
             and executes the batch [tasks]. Returns a list containing the 
@@ -79,8 +79,12 @@ class TaskWorker(Worker):
 
         if batch.model_data != None:
             if self.GPU_state.does_have_idle_copy(batch.model_data.id, current_time):
-                reserved_instance_id = self.GPU_state.reserve_idle_copy(
-                   batch.model_data, current_time, batch, batch_exec_time)
+                if instance_id:
+                    reserved_instance_id = instance_id
+                    self.GPU_state.reserve_instance(instance_id, current_time, batch, batch_exec_time)
+                else:
+                    reserved_instance_id = self.GPU_state.reserve_idle_copy(
+                        batch.model_data, current_time, batch, batch_exec_time)
 
                 # verify reserved instance
                 reserved_state = [s for s in self.GPU_state.state_at(current_time)
@@ -101,8 +105,8 @@ class TaskWorker(Worker):
             task.log.task_execution_start_timestamp = current_time + model_fetch_time
 
         task_end_time = current_time + model_fetch_time + batch_exec_time + \
-            SameMachineCPUtoGPU_delay(batch.tasks[0].input_size * batch.size()) + \
-            SameMachineGPUtoCPU_delay(batch.tasks[0].result_size * batch.size())
+            SameMachineCPUtoGPU_delay(sum(t.input_size for t in batch.tasks)) + \
+            SameMachineGPUtoCPU_delay(sum(t.result_size for t in batch.tasks))
         task_end_events = []
 
         task_end_events.append(EventOrders(current_time, BatchStartEvent(

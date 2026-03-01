@@ -13,6 +13,10 @@ from schedulers.algo.inferline_planner_algo import Inferline
 from verification.autoscaling import AutoscalingVerifier
 from verification.batch_execution_verifier import BatchExecutionVerifier
 
+import core.configs.gen_config as gcfg
+import core.configs.model_config as mcfg
+import core.configs.workflow_config as wcfg
+
 sys.dont_write_bytecode = True
 np.random.seed(42)
 
@@ -33,7 +37,6 @@ SCHEDULER_NAMES = bidict({
 
 def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str):
     assert(scheduler_type in [DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD, NEXUS])
-    assert(scheduler_type != SHEPHERD or not gcfg.ENABLE_MULTITHREADING) # concurrency not implemented for Shepherd
     assert(scheduler_type != NEXUS or gcfg.SLO_GRANULARITY == "TASK") # Nexus requires task-level SLO split
     assert(gcfg.BOOST_POLICY == "EDF" or gcfg.BATCH_POLICY != "OPTIMAL") # Optimal policy sorts by deadline
 
@@ -112,8 +115,19 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
                 f.close()
 
     if gcfg.ENABLE_VERIFICATION:
-        AutoscalingVerifier(sim).run_verifier()
-        BatchExecutionVerifier(sim).run_verifier()
+        #AutoscalingVerifier(sim).run_verifier()
+
+        BatchExecutionVerifier(
+            {
+                "worker_log": sim.worker_log,
+                "model_log": sim.worker_model_log,
+                "batch_log": sim.batch_exec_log,
+                "drop_log": sim.task_drop_log,
+                "event_log": sim.event_log,
+                "job_log": sim.result_to_export
+            },
+            gcfg, mcfg, wcfg
+        ).run_verifier()
 
 
 if __name__ == "__main__":

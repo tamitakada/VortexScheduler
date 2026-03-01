@@ -328,3 +328,27 @@ class GPUState(object):
                     return
             assert(False) # no batch of [batch_id] found
         self._insert_state_marker(time, _release_one_copy, _release_one_copy)
+
+    def get_instance_state(self, instance_id, time: float):
+        for state in self.state_at(time):
+            if state.model.id == instance_id:
+                return state
+        return None
+            
+    def reserve_instance(self, instance_id, time: float, reserved_batch: Batch, reserve_for: float):
+        reserved_instance = self.get_instance_state(instance_id, time)
+        reserve_until = max(reserved_instance.model.active_from, time) + reserve_for
+        reserve_from = max(reserved_instance.model.active_from, time)
+
+        def _occupy_one_copy(timestamp, states):
+            for j, state in enumerate(states):
+                if state.model.id == reserved_instance.model.id:
+                    assert(states[j].reserved_batch == None)
+                    states[j].reserved_batch = reserved_batch
+                    states[j].reserved_until = reserve_until
+                    states[j].reserve_from = reserve_from
+                    return
+            assert(False)
+
+        # reserve 1 idle copy from start to exec end
+        self._insert_state_marker(time, _occupy_one_copy, _occupy_one_copy)
