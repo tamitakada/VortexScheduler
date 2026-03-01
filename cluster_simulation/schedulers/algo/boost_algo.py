@@ -62,5 +62,5 @@ def get_task_priority_by_boost(time, task: Task, boost_policy: int, boost_parame
     boost_size = get_job_boost_size(time, task.job, boost_policy)
     # print(f"Task {task}, boost {boost_size}")
     
-    return task.job.create_time - 1 / boost_parameter * np.log(
+    return task.get_task_deadline() - 1 / boost_parameter * np.log(
         1 / (1 - np.exp(-boost_parameter * boost_size)))
