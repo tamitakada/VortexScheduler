@@ -128,7 +128,7 @@ class AbortAllJobsEvent(Event):
                 evicted_batch = worker.evict_batch(batch_id, current_time)
                 if self.simulation.centralized_scheduler:
                     events.append(EventOrders(
-                        current_time + CPU_to_CPU_delay(evicted_batch.tasks[0].input_size * evicted_batch.size()), 
+                        current_time + CPU_to_CPU_delay(sum(t.input_size for t in evicted_batch.tasks)), 
                         TasksArrivalAtScheduler(self.simulation, evicted_batch.tasks)))
                 else:
                     # TODO: decentral + HERD case

@@ -241,7 +241,7 @@ class Simulation(object):
             evicted_batch = worker.evict_batch(batch.id, time)
             
             events.append(EventOrders(
-                time + CPU_to_CPU_delay(evicted_batch.tasks[0].input_size * evicted_batch.size()), 
+                time + CPU_to_CPU_delay(sum(t.input_size for t in evicted_batch.tasks)), 
                 TasksArrivalAtScheduler(self, evicted_batch.tasks)))
         
         # handle currently queued tasks
@@ -455,7 +455,7 @@ class Simulation(object):
         """Initializes Workflow objects for all job types in [self.job_types_list].
         """
         return {
-            cfg["JOB_TYPE"] : Workflow(cfg, self.models, gcfg.SLO_GRANULARITY) for cfg in WORKFLOW_LIST
+            cfg["JOB_TYPE"] : Workflow(cfg, self.models, gcfg.SLO_TYPE) for cfg in WORKFLOW_LIST
             if cfg["JOB_TYPE"] in self.job_types_list}
             
     def generate_all_jobs(self):
@@ -481,7 +481,8 @@ class Simulation(object):
                     
                     next_job = client.create_job(job_type, job_id, curr_send_rate, curr_time)
                     self.jobs[next_job.id] = next_job
-                    curr_time = next_job.create_time + CPU_to_CPU_delay(next_job.tasks[0].input_size)
+                    curr_time = next_job.create_time + CPU_to_CPU_delay(
+                        sum(t.input_size for t in next_job.tasks if len(t.required_task_ids)))
 
                     if self.centralized_scheduler:
                         self.event_queue.put(EventOrders(
@@ -594,20 +595,19 @@ class Simulation(object):
                 stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
                 stats_dict["clients"][-1][job_type]["total_num_complete"] = len(completed_jobs)
 
-                if gcfg.SLO_GRANULARITY == "JOB" or self.simulation_name == "nexus":
-                    nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
-                    stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
+                nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
+                stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
 
-                    tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo)]
-                    
-                    stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
+                tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo)]
+                
+                stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
 
-                    if tardy_jobs:
-                        job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]
+                if tardy_jobs:
+                    job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]
 
-                        stats_dict["clients"][-1][job_type]["median_tardiness_ms"] = np.median(job_tardiness)
-                        stats_dict["clients"][-1][job_type]["mean_tardiness_ms"] = np.mean(job_tardiness)
-                        stats_dict["clients"][-1][job_type]["std_tardiness_ms"] = np.std(job_tardiness)
+                    stats_dict["clients"][-1][job_type]["median_tardiness_ms"] = np.median(job_tardiness)
+                    stats_dict["clients"][-1][job_type]["mean_tardiness_ms"] = np.mean(job_tardiness)
+                    stats_dict["clients"][-1][job_type]["std_tardiness_ms"] = np.std(job_tardiness)
 
                 if completed_jobs:
                     job_latencies = [j.end_time - j.create_time for j in completed_jobs]

@@ -157,5 +157,35 @@ MODELS = [
                                  12: {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1,7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1},
                                  24: {1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1,7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1}},
         "EXEC_TIME_CVS": {6: 0.06, 12: 0.06, 24: 0.06}
-    }
+    },
+    {
+        # model id 14
+        "MODEL_NAME": "agg6",
+        "MODEL_SIZE": 2101000,       # in kB
+        "MAX_BATCH_SIZE": 1,
+        "MIG_BATCH_EXEC_TIMES": {
+            24: {1: 2}, 6: {1: 2}
+        },
+        "EXEC_TIME_CVS": {6: 0.1, 12: 0.1, 24: 0.1},
+    },
+    {
+        # model id 15
+        "MODEL_NAME": "agg7",
+        "MODEL_SIZE": 2101000,       # in kB
+        "MAX_BATCH_SIZE": 1,
+        "MIG_BATCH_EXEC_TIMES": {
+            24: {1: 10}, 6: {1: 10}
+        },
+        "EXEC_TIME_CVS": {6: 0.1, 12: 0.1, 24: 0.1},
+    },
+    {
+        # model id 16
+        "MODEL_NAME": "agg8",
+        "MODEL_SIZE": 2101000,       # in kB
+        "MAX_BATCH_SIZE": 1,
+        "MIG_BATCH_EXEC_TIMES": {
+            24: {1: 20}, 6: {1: 20}
+        },
+        "EXEC_TIME_CVS": {6: 0.1, 12: 0.1, 24: 0.1},
+    },
 ]

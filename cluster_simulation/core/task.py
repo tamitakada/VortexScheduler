@@ -29,7 +29,7 @@ class Task(object):
             self.job.id, self.task_id, is_initial_task=(len(self.required_task_ids) == 0))
 
     def get_task_deadline(self):
-        if gcfg.SLO_GRANULARITY == "TASK":
+        if gcfg.SLO_TYPE == "NEXUS":
             assert(self.slo != None)
             return self.log.task_placed_on_worker_queue_timestamp + self.slo * (1 + gcfg.SLO_SLACK)
         else:

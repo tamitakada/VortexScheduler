@@ -4,8 +4,7 @@ from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 
 from schedulers.centralized.scheduler import Scheduler
-
-import pandas as pd
+# from schedulers.algo.nexus_flex_algo import NexusSLOSplitter
 
 
 class HashTaskScheduler(Scheduler):
@@ -61,6 +60,25 @@ class HashTaskScheduler(Scheduler):
                             job.create_time + job.slo,
                             reason=SchedulerDropJob._ARRIVAL_RATE_CAP))]
 
+        # in progress
+        # if gcfg.SLO_TYPE == "NEXUS":
+        #     if current_time > 1000:
+        #         if job.job_type_id not in self.workflow_task_slos:
+        #             self.workflow_task_slos[job.job_type_id] = NexusSLOSplitter.generate_task_slos(
+        #                 current_time, 1000, self.simulation, self.simulation.workflows[job.job_type_id], job.slo)
+        #         else:
+        #             NexusSLOSplitter.redistribute_task_slos(
+        #                 current_time, self.simulation, self.simulation.workflows[job.job_type_id],
+        #                 self.workflow_task_slos[job.job_type_id], 5)
+
+        #     for task in job.tasks:
+        #         if job.job_type_id in self.workflow_task_slos:
+        #             task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
+        #             task.model_data.max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #             self.simulation.models[task.model_data.id].max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #         else:
+        #             task.slo = job.slo
+
         super().schedule_job_on_arrival(job, current_time)
 
         self._assign_adfg(job.tasks, current_time)
@@ -69,7 +87,7 @@ class HashTaskScheduler(Scheduler):
 
         initial_tasks = [task for task in job.tasks if len(task.required_task_ids) == 0]
         for task in initial_tasks:
-            task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
+            task_arrival_time = current_time # + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
                 task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))
@@ -84,7 +102,7 @@ class HashTaskScheduler(Scheduler):
         self._assign_adfg(tasks, current_time)
         
         for task in tasks:
-            task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
+            task_arrival_time = current_time # + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
                 task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))

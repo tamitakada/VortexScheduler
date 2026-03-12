@@ -10,6 +10,7 @@ from core.configs.workflow_config import *
 from workers.worker import Worker
 
 from schedulers.centralized.scheduler import Scheduler
+# from schedulers.algo.nexus_flex_algo import NexusSLOSplitter
 from schedulers.algo.batching_policies import get_batch
 
 
@@ -55,7 +56,7 @@ class ShepherdScheduler(Scheduler):
                         "drop_time": current_time, 
                         "create_time": task.log.job_creation_timestamp,
                         "arrival_time": task.log.task_placed_on_worker_queue_timestamp,
-                        "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
+                        "slo": task.slo if gcfg.SLO_TYPE == "NEXUS" else task.job.slo, 
                         "deadline": task.get_task_deadline()
                     }
         
@@ -69,6 +70,42 @@ class ShepherdScheduler(Scheduler):
                     continue
 
     def schedule_job_on_arrival(self, job, current_time):
+        # in progress
+        # if gcfg.SLO_TYPE == "NEXUS":
+        #     if current_time > 1000:
+        #         if job.job_type_id not in self.workflow_task_slos:
+        #             self.workflow_task_slos[job.job_type_id] = NexusSLOSplitter.generate_task_slos(
+        #                 current_time, 1000, self.simulation, self.simulation.workflows[job.job_type_id], job.slo)
+
+        #             for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
+        #                 self.task_slo_log.loc[len(self.task_slo_log)] = [current_time, 
+        #                                                                  job.job_type_id, 
+        #                                                                  task_id,
+        #                                                                  self.workflow_task_slos[job.job_type_id][task_id][0],
+        #                                                                  self.workflow_task_slos[job.job_type_id][task_id][1]]
+
+        #         else:
+        #             prev_slos = self.workflow_task_slos[job.job_type_id].copy()
+
+        #             NexusSLOSplitter.redistribute_task_slos(
+        #                 current_time, self.simulation, self.simulation.workflows[job.job_type_id],
+        #                 self.workflow_task_slos[job.job_type_id], 15)
+                    
+        #             for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
+        #                 if self.workflow_task_slos[job.job_type_id][task_id] != prev_slos[task_id]:
+        #                     self.task_slo_log.loc[len(self.task_slo_log)] = [
+        #                         current_time, job.job_type_id, task_id, 
+        #                         self.workflow_task_slos[job.job_type_id][task_id][0],
+        #                         self.workflow_task_slos[job.job_type_id][task_id][1]]
+
+        #     for task in job.tasks:
+        #         if job.job_type_id in self.workflow_task_slos:
+        #             task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
+        #             task.model_data.max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #             self.simulation.models[task.model_data.id].max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #         else:
+        #             task.slo = np.inf
+
         return self.schedule_tasks_on_arrival(
             [t for t in job.tasks if len(t.required_task_ids) == 0], current_time)
 

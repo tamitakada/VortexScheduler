@@ -52,7 +52,7 @@ class TaskData:
                     self.output_size,
                     self.max_wait_time,
                     self.max_emit_batch_size,
-                    self.slo if gcfg.SLO_GRANULARITY == "TASK" else 0)
+                    self.slo if gcfg.SLO_TYPE == "NEXUS" else 0)
         
         for prev_task in self.prev_tasks:
             task.required_task_ids.append(prev_task.id)

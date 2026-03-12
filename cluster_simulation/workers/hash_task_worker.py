@@ -145,7 +145,7 @@ class HashTaskWorker(TaskWorker):
                         "drop_time": current_time, 
                         "create_time": task.log.job_creation_timestamp,
                         "arrival_time": task.log.task_placed_on_worker_queue_timestamp,
-                        "slo": task.slo if gcfg.SLO_GRANULARITY == "TASK" else task.job.slo, 
+                        "slo": task.slo if gcfg.SLO_TYPE == "NEXUS" else task.job.slo, 
                         "deadline": task.get_task_deadline()
                     }
                     continue
@@ -286,9 +286,6 @@ class HashTaskWorker(TaskWorker):
         """
         events = []
 
-        # TODO: diff emit sizes for diff workflows?
-        emit_size = batch.tasks[0].max_emit_batch_size
-
         # model_id -> list[Task]
         ready_tasks_by_model = {}
         for task in batch.tasks:
@@ -300,46 +297,52 @@ class HashTaskWorker(TaskWorker):
         
         for mid, ready_tasks in ready_tasks_by_model.items():
             prev_curr = current_time
-            for i in range(0, len(ready_tasks), emit_size):
-                curr_send_batch = ready_tasks[i:(i+emit_size)]
+
+            for task in ready_tasks:
+            # for i in range(0, len(ready_tasks), emit_size):
+            #     curr_send_batch = ready_tasks[i:(i+emit_size)]
 
                 if gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
                     # choose worker to assign next DAG tasks to round robin
                     candidate_worker_idx = random.randint(0, len(self.simulation.worker_ids_by_creation)-1)
-                    if curr_send_batch[0].model_data.id in self.last_worker_idx:
-                        candidate_worker_idx = (self.last_worker_idx[curr_send_batch[0].model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+                    if task.model_data.id in self.last_worker_idx:
+                        candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
                     else:
-                        self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
+                        self.last_worker_idx[task.model_data.id] = candidate_worker_idx
 
                     candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
 
                     # don't choose worker without the required model
-                    while curr_send_batch[0].model_data and \
-                        all(s.model.data.id != curr_send_batch[0].model_data.id for s in
+                    while task.model_data and \
+                        all(s.model.data.id != task.model_data.id for s in
                             self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
                         
                         candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
                         candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
 
-                    self.last_worker_idx[curr_send_batch[0].model_data.id] = candidate_worker_idx
+                    self.last_worker_idx[task.model_data.id] = candidate_worker_idx
 
                 elif gcfg.DISPATCH_POLICY == "HEFT":
                     candidate_worker_id = min(self.simulation.worker_ids_by_creation,
                                               key=lambda wid: self.simulation.workers[wid].get_avg_model_queue_len(
                                                   current_time, 
-                                                  curr_send_batch[0].model_data.id,
+                                                  task.model_data.id,
                                                   info_staleness=0 if wid == self.id else gcfg.LOAD_INFORMATION_STALENESS))
                 else:
                     raise ValueError("Unknown dispatch policy")
 
-                transfer_delay = 0
-                if candidate_worker_id != self.id:  # The next worker on the pipeline is NOT the same node
-                    transfer_delay = CPU_to_CPU_delay(curr_send_batch[0].result_size * len(curr_send_batch))
+                job_exec_log = self.simulation.task_exec_log[self.simulation.task_exec_log["job_id"]==task.job.id]
+                last_dep_end_time = 0
+                for prev_id in task.required_task_ids:
+                    task_end_time = job_exec_log[job_exec_log["task_id"]==prev_id]["exec_end_time"].iloc[0]
+                    transfer_time = 0 if (job_exec_log[job_exec_log["task_id"]==prev_id]["worker_id"] == candidate_worker_id).sum() else \
+                        CPU_to_CPU_delay(task.job.get_task_by_id(prev_id).result_size)
+                    last_dep_end_time = max(last_dep_end_time, task_end_time + transfer_time)
 
-                events.append(EventOrders(prev_curr + transfer_delay, TasksArrival(
-                    self.simulation, self.simulation.workers[candidate_worker_id], curr_send_batch)))
+                events.append(EventOrders(last_dep_end_time, TasksArrival(
+                    self.simulation, self.simulation.workers[candidate_worker_id], [task])))
                 
-                prev_curr = prev_curr + transfer_delay
+                # prev_curr = prev_curr + transfer_delay
 
         return events
     
