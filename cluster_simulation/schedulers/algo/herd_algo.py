@@ -4,8 +4,11 @@ from core.configs.workflow_config import *
 
 from scipy import stats
 
-import gurobipy as gp
-from gurobipy import GRB
+try:
+    import gurobipy as gp
+    from gurobipy import GRB
+except ImportError:
+    print("Gurobipy not found")
 
 
 def _model_affinity(m1: Model, m2: Model) -> float:
