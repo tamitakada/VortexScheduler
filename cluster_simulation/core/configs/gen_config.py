@@ -1,28 +1,54 @@
 import numpy as np
 
+""" --------      Simulation Parameters      -------- """
+
+PRODUCE_EVENT_LOG = True
+
+# Runs a trace of produced event logs to verify simulator actions
+ENABLE_VERIFICATION = True
+ENABLE_TRACE_VERIFICATION = False
+VERIFICATION_WINDOW_SIZE = 5000 # only process up to this many events (don't do full trace)
+
+# Print event details for every step of verifier trace
+ENABLE_VERIFICATION_DEBUG_LOGGING = True
 
 """ --------      Worker Machine Parameters      -------- """
 
 GPU_MEMORY_SIZE = 24000000  # in KB, 24GB for NVIDIA A30
-TOTAL_NUM_OF_NODES = 12
+MIN_NUM_NODES = 5
+MAX_NUM_NODES = 5
 VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
+MAX_NUM_MODELS_PER_NODE = 4
 
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    {1: {"NUM_JOBS": 5000,
-         "SEND_RATES": [6],
+    {6: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}}, #422
-    {4: {"NUM_JOBS": 5000,
-         "SEND_RATES": [6],
+         "SLO": int(62.5 * 4)}},
+    {7: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}}, #1481
-    {5: {"NUM_JOBS": 5000,
-         "SEND_RATES": [6],
+         "SLO": int(70.5 * 4)}},
+    {8: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": np.inf}} #634
+         "SLO": int(80.5 * 4)}},
+
+    # {1: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(256.3*2)}},
+    # {4: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(787.2*2)}},
+    # {5: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(388.7*2)}},
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -45,49 +71,71 @@ HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 
 """  -------        Boost Parameters  --------- """
 
-BOOST_PARAMETER = 0.00104567474
+BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
-# JOB_SIZE | REMAINING_JOB_TIME | NONE
-BOOST_POLICY = "REMAINING_JOB_TIME"
+# JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
+BOOST_POLICY = "FCFS"
+
+""" -------         Inferline Parameters  -------- """
+
+ESTIMATOR_CLIENT_CONFIGS = [ # in ms
+    {0: {"NUM_JOBS": 1000,
+         "SEND_RATES": [55, 95],
+         "SEND_RATE_CHANGE_INTERVALS": [500], 
+         "SLO": 1014}},
+]
+INFERLINE_TUNING_INTERVAL = 15 * 1000 # ms
+
+ENABLE_ESTIMATOR_LOGGING = False
 
 """  -------        General Scheduling Parameters  --------- """
 
+# ROUND_ROBIN | HEFT
+DISPATCH_POLICY = "ROUND_ROBIN" #"HEFT"
+
 # OPTIMAL | LARGEST
 # [OPTIMAL] Largest batch for which all task SLOs are met
-# [LARGEST] Largest batch < model max batch size
+# [LARGEST] Largest batch <= model max batch size
 BATCH_POLICY = "LARGEST"
+FALLBACK_TO_LARGEST_BATCH = True
 
-# CLUSTER_ADMISSION_LIMIT | TASK_ADMISSION_LIMIT | OPTIMAL | LATEST_POSSIBLE | NONE
+# OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
 DROP_POLICY = "LATEST_POSSIBLE"
 
 SLO_SLACK = 0
-SLO_GRANULARITY = "JOB" # TASK | JOB
+SLO_TYPE = "JOB_LEVEL" # JOB_LEVEL | NEXUS
 
 ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
-ENABLE_MODEL_PREFETCH = False
-ENABLE_DYNAMIC_MODEL_LOADING = False
 
-# HERD | VORTEX | CUSTOM
-# NOTE: HERD requires ENABLE_DYNAMIC_MODEL_LOADING
-ALLOCATION_STRATEGY = "CUSTOM"
+# NONE | INFERLINE
+AUTOSCALING_POLICY = "NONE" #"INFERLINE"
+
+# HERD | CUSTOM | INFERLINE
+ALLOCATION_STRATEGY = "CUSTOM" #"INFERLINE"
 
 # [(partition size in GB, [model ids])]
 CUSTOM_ALLOCATION = [
- (12, [4]), (6, [5,13]), (6, [5,13]),
- (12, [6]), (12, [6]), 
- (12, [7]), (12, [7]), 
- (12, [7]), (12, [7]),
- (12, [8]), (12, [8]),
- (24, [9]), 
- (24, [9]), 
- (24, [9]), 
- (24, [9]),
- (24, [10]),
- (24, [10]),
- (24, [10])]
+    (24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2]),
+    (6, [14]), (6, [15]), (6, [16]), (6, [])
+]
 
-# ppl1 4 node real alloc:
+# 12-node mutlitenant ppl 2 (3 versions) alloc
+# [
+#  (12, [4]), (6, [5,13]), (6, [5,13]),
+#  (12, [6]), (12, [6]), 
+#  (12, [7]), (12, [7]), 
+#  (12, [7]), (12, [7]),
+#  (12, [8]), (12, [8]),
+#  (24, [9]), 
+#  (24, [9]), 
+#  (24, [9]), 
+#  (24, [9]),
+#  (24, [10]),
+#  (24, [10]),
+#  (24, [10])]
+
+# ppl1 4 node alloc:
 # [(24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2])]
 
-# ppl2 4 node real alloc:
+# ppl2 4 node alloc:
 # [(12, [4]), (12, [5,6]), (12, [7]), (12, [7]), (12, [7]), (12, [7]), (12, [7]), (12, [7])]

@@ -1,9 +1,10 @@
-from core.configs.gen_config import *
+import core.configs.gen_config as gcfg
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
 from core.events.worker_events import *
 
 from schedulers.centralized.scheduler import Scheduler
+# from schedulers.algo.nexus_flex_algo import NexusSLOSplitter
 
 
 class HashTaskScheduler(Scheduler):
@@ -13,16 +14,80 @@ class HashTaskScheduler(Scheduler):
 
     def __init__(self, simulation, herd_assignment=None):
         super().__init__(simulation, herd_assignment)
-        self.next_worker_id = { jt: [0 for _ in get_task_types([jt])] for jt in self.simulation.job_types_list }
+
+        # for round robin tracking
+        self.last_worker_idx = {}
+
+        self.last_change = 0
 
     def schedule_job_on_arrival(self, job, current_time):
+        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
+            if current_time > 3000:
+                curr_ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 1)
+                ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 3)
+                tput = self.simulation.get_throughput(current_time, job.job_type_id, 1000, 3)
+                gput = self.simulation.get_goodput(current_time, job.job_type_id, 1000, 3)
+
+                self.simulation.tput_gput_log.loc[len(self.simulation.tput_gput_log)] = [current_time, job.job_type_id, ar, tput, gput]
+
+                relevant_limits = self.simulation.limit_log[self.simulation.limit_log["workflow_id"]==job.job_type_id]
+                
+                sys_limit = -1 if len(relevant_limits) == 0 else relevant_limits.loc[relevant_limits["time"].idxmax(), "limit"]
+
+                if sys_limit <= 0 or (self.last_change >= 0 and current_time - self.last_change > 1000 and ar < sys_limit): 
+                    if ar - tput > 3:
+                        sys_limit = ar - 0.25 * (ar - tput)
+                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
+                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
+                        self.last_change = -1
+                    elif tput - gput > 3:
+                        sys_limit = ar - 0.25 * (ar - gput)
+                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
+                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
+                        self.last_change = -1
+                
+                # set last_change = first time arrival rate is detected to have responded to latest system limit
+                if curr_ar < sys_limit and self.last_change < 0:
+                    self.last_change = current_time
+        
+                if sys_limit > 0 and curr_ar > sys_limit:
+                    return [EventOrders(
+                        current_time, 
+                        SchedulerDropJob(
+                            self.simulation, 
+                            job, 
+                            job.tasks[0], 
+                            job.create_time + job.slo,
+                            reason=SchedulerDropJob._ARRIVAL_RATE_CAP))]
+
+        # in progress
+        # if gcfg.SLO_TYPE == "NEXUS":
+        #     if current_time > 1000:
+        #         if job.job_type_id not in self.workflow_task_slos:
+        #             self.workflow_task_slos[job.job_type_id] = NexusSLOSplitter.generate_task_slos(
+        #                 current_time, 1000, self.simulation, self.simulation.workflows[job.job_type_id], job.slo)
+        #         else:
+        #             NexusSLOSplitter.redistribute_task_slos(
+        #                 current_time, self.simulation, self.simulation.workflows[job.job_type_id],
+        #                 self.workflow_task_slos[job.job_type_id], 5)
+
+        #     for task in job.tasks:
+        #         if job.job_type_id in self.workflow_task_slos:
+        #             task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
+        #             task.model_data.max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #             self.simulation.models[task.model_data.id].max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
+        #         else:
+        #             task.slo = job.slo
+
+        super().schedule_job_on_arrival(job, current_time)
+
         self._assign_adfg(job.tasks, current_time)
 
         task_arrival_events = []
 
         initial_tasks = [task for task in job.tasks if len(task.required_task_ids) == 0]
         for task in initial_tasks:
-            task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
+            task_arrival_time = current_time # + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
                 task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))
@@ -30,12 +95,14 @@ class HashTaskScheduler(Scheduler):
         return task_arrival_events
 
     def schedule_tasks_on_arrival(self, tasks, current_time):
+        super().schedule_tasks_on_arrival(tasks, current_time)
+
         task_arrival_events = []
 
         self._assign_adfg(tasks, current_time)
         
         for task in tasks:
-            task_arrival_time = current_time + CPU_to_CPU_delay(task.input_size)
+            task_arrival_time = current_time # + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
             task_arrival_events.append(EventOrders(
                 task_arrival_time, TaskArrival(self.simulation, self.simulation.workers[worker_index], task, task.job.id)))
@@ -44,20 +111,29 @@ class HashTaskScheduler(Scheduler):
     
     def _assign_adfg(self, tasks, current_time):
         for task in tasks:
-            if ENABLE_DYNAMIC_MODEL_LOADING:
-                if ALLOCATION_STRATEGY == "HERD":
-                    # don't choose worker that is not in the correct group
-                    while task.model and task.model.model_id not in self.herd_assignment.group_models[self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].group_id] and \
-                        self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].total_memory * 10**6 < task.model.model_size:
-                        self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
-                else:
-                    # don't choose partition that is too small
-                    while task.model and self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].total_memory * 10**6 < task.model.model_size:
-                        self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
-            else:
+            if gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
+                candidate_worker_idx = 0
+                if task.model_data.id in self.last_worker_idx:
+                    candidate_worker_idx = (self.last_worker_idx[task.model_data.id] + 1) % len(self.simulation.worker_ids_by_creation)
+
+                candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
                 # don't choose worker without the required model
-                while task.model and all(m.model_id != task.model.model_id for m in self.simulation.workers[self.next_worker_id[task.task_type[0]][task.task_id]].GPU_state.placed_models(current_time)):
-                    self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)
-            task.ADFG[task.task_id] = self.next_worker_id[task.task_type[0]][task.task_id]
+                while task.model_data and \
+                    all(s.model.data.id != task.model_data.id for s in
+                        self.simulation.workers[candidate_worker_id].GPU_state.state_at(current_time)):
+
+                    candidate_worker_idx = (candidate_worker_idx + 1) % len(self.simulation.worker_ids_by_creation)
+                    candidate_worker_id = self.simulation.worker_ids_by_creation[candidate_worker_idx]
+
+                self.last_worker_idx[task.model_data.id] = candidate_worker_idx
+
+            elif gcfg.DISPATCH_POLICY == "HEFT":
+                candidate_worker_id = min(self.simulation.worker_ids_by_creation,
+                                          key=lambda wid: self.simulation.workers[wid].get_avg_model_queue_len(
+                                            current_time, 
+                                            task.model_data.id,
+                                            info_staleness=gcfg.LOAD_INFORMATION_STALENESS))
+
+            task.ADFG[task.task_id] = candidate_worker_id
             task.job.ADFG[task.task_id] = task.ADFG
-            self.next_worker_id[task.task_type[0]][task.task_id] = (self.next_worker_id[task.task_type[0]][task.task_id] + 1) % len(self.simulation.workers)

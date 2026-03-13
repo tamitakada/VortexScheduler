@@ -18,14 +18,19 @@ class Scheduler:
         """
             Schedules all [job.tasks].
         """
-        raise NotImplementedError()
+        for task in job.tasks:
+            if len(task.required_task_ids) == 0:
+                self.simulation.add_task_arrival_to_worker_metrics(
+                    current_time, task, None)
     
     def schedule_tasks_on_arrival(self, tasks: list[Task], current_time: float) -> list[EventOrders]:
         """
             Schedules [tasks] which may or may not belong to the same jobs or
             be of the same type.
         """
-        raise NotImplementedError()
+        for task in tasks:
+            self.simulation.add_task_arrival_to_worker_metrics(
+                current_time, task, None)
     
     def schedule_tasks_on_queue(self, current_time: float) -> list[EventOrders]:
         """

@@ -6,15 +6,15 @@ is referenced from Sparrow: https://github.com/radlab/sparrow
 import numpy as np
 import pandas as pd
 
-import gurobipy as gp
-from gurobipy import GRB
-
 from queue import PriorityQueue
+from collections import Counter
 
-from core.configs.gen_config import *
-from core.metadata_service import *
+import core.configs.model_config as mcfg
+import core.configs.gen_config as gcfg
 from core.print_utils import *
 from core.external_client import *
+from core.data_models.workflow import Workflow
+from core.data_models.model_data import ModelData
 
 from core.events.base import *
 from core.events.centralized_scheduler_events import *
@@ -26,33 +26,38 @@ from workers.hash_task_worker import *
 
 from schedulers.algo.herd_algo import get_herd_assignment
 from schedulers.centralized.shepherd.herd_assignment import HerdAssignment
+from core.allocation import ModelAllocation
+from schedulers.algo.vortex_planner_algo import VortexPlanner
+
+import uuid
 
 
 class Simulation(object):
     def __init__(
             self,
-            simulation_name,
-            job_split,  
+            simulation_name, 
             centralized_scheduler=False,  
-            dynamic_adjust=False,  
-            total_workers=1,
-            slots_per_worker=1,
+            dynamic_adjust=False,
             job_types_list=[0],
-            produce_breakdown=False
+            produce_breakdown=False,
+            inferline=None
     ):
+        self.inferline = inferline
+
         self.simulation_name = simulation_name
         self.centralized_scheduler = centralized_scheduler
-        self.job_split = job_split
-        self.total_workers = total_workers
-        self.slots_per_worker = slots_per_worker
         self.job_types_list = job_types_list
-        self.job_split = job_split
         self.dynamic_adjust = dynamic_adjust
-        self.workers = []
-        self.metadata_service = MetadataService()
+
+        self.workers = {} # uuid -> Worker
+        self.worker_ids_by_creation = [] # global ordering of workers
+
         self.external_clients = []
+
+        self.models: list[ModelData] = self.generate_models()
+        self.workflows: list[Workflow] = self.generate_workflows()
         
-        self.remaining_jobs = sum(cc[jt]["NUM_JOBS"] for cc in CLIENT_CONFIGS for jt in cc.keys())
+        self.remaining_jobs = sum(cc[jt]["NUM_JOBS"] for cc in gcfg.CLIENT_CONFIGS for jt in cc.keys())
         self.event_queue = PriorityQueue()
 
         self.jobs = {}
@@ -61,52 +66,65 @@ class Simulation(object):
         self.result_to_export = pd.DataFrame()
         self.tasks_logging_times = pd.DataFrame()
         self.event_log = pd.DataFrame(columns=["time", "worker_id", "event"])
-        self.batch_exec_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "model_id", "batch_size", "job_ids"])
+        self.batch_exec_log = pd.DataFrame(columns=["batch_id","start_time", "end_time", "worker_id", "model_id", "batch_size", "job_ids"])
         self.task_drop_log = pd.DataFrame(columns=["client_id", "job_id", "workflow_id", "task_id", "drop_time", "create_time",
                                                    "arrival_time", "slo", "deadline"])
         
         # TODO: client ID to worker mets
         self.task_exec_log = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "task_id", "worker_id", 
-                                                   "worker_arrival_time", "exec_start_time", "exec_end_time"])
+                                                   "worker_arrival_time", "exec_start_time", "exec_end_time", "deadline"])
         self.task_arrival_log = pd.DataFrame(columns=["time", "client_id", "workflow_id", "job_id", "task_id", "model_id", "worker_id"])
         self.worker_metrics_log = pd.DataFrame(columns=["time", "sampled_interval_ms", "worker_id", "workflow_id",
                                                         "task_id", "task_arrival_rate", "task_throughput"])
+        self.worker_log = pd.DataFrame(columns=["time", "add_or_remove", "worker_id"])
+        self.worker_model_log = pd.DataFrame(columns=["start_time", "end_time", "worker_id", "model_id", "instance_id", "placed_or_evicted"])
+
+        # admission control logs
+        self.tput_gput_log = pd.DataFrame(columns=["time", "workflow_id", "ar", "tput", "gput"])
+        self.limit_log = pd.DataFrame(columns=["time", "workflow_id", "limit"])
 
         self.allocation_logs = []
 
         print("---- SIMULATION : " + self.simulation_name + "----")
         self.produce_breakdown =  produce_breakdown
 
-    def add_task_arrival_to_worker_metrics(self, time: float, task: Task, worker: Worker):
+    def add_task_arrival_to_worker_metrics(self, time: float, task: Task, worker: Worker | None):
         """
         Update task arrival metrics by logging newly arrived [task] at [worker].
         """
-        if ((self.task_arrival_log["job_id"]==task.job_id) & (self.task_arrival_log["task_id"]==task.task_id)).any():
-            print(f"[Simulation] Already logged Job {task.job_id}, Task {task.task_id} arrival")
+        logged_worker_id = "N/A"
+        if worker:
+            logged_worker_id = worker.id
+
+        if ((self.task_arrival_log["job_id"]==task.job.id) & \
+            (self.task_arrival_log["task_id"]==task.task_id) & \
+            (self.task_arrival_log["worker_id"]==logged_worker_id)).any():
+
+            print(f"[Simulation] Already logged Job {task.job.id}, Task {task.task_id} arrival @ Worker {logged_worker_id}")
             return
         
         self.task_arrival_log.loc[len(self.task_arrival_log)] = \
-            [time, task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, task.model.model_id, worker.worker_id]
-        
-    def add_task_exec_to_worker_metrics(self, task: Task, worker: Worker):
+            [time, task.job.client_id, task.job.job_type_id, task.job.id, task.task_id, task.model_data.id, logged_worker_id]
+
+    def add_task_exec_to_worker_metrics(self, task: Task, worker: Worker, deadline: float):
         """
         Update task exec metrics by logging newly arrived [task] at [worker].
         """
-        if ((self.task_exec_log["job_id"]==task.job_id) & (self.task_exec_log["task_id"]==task.task_id)).any():
-            print(f"[Simulation] Already logged Job {task.job_id}, Task {task.task_id} exec")
+        if ((self.task_exec_log["job_id"]==task.job.id) & (self.task_exec_log["task_id"]==task.task_id)).any():
+            print(f"[Simulation] Already logged Job {task.job.id}, Task {task.task_id} exec")
             return
         
         self.task_exec_log.loc[len(self.task_exec_log)] = \
-            [task.job.client_id, task.job.job_type_id, task.job_id, task.task_id, worker.worker_id,
-             task.log.task_placed_on_worker_queue_timestamp, task.log.task_execution_start_timestamp, task.log.task_execution_end_timestamp]
+            [task.job.client_id, task.job.job_type_id, task.job.id, task.task_id, worker.id,
+             task.log.task_placed_on_worker_queue_timestamp, task.log.task_execution_start_timestamp, task.log.task_execution_end_timestamp, deadline]
         
     def add_worker_metrics_sample(self, time: float, interval: float):
         """
         Log a new sample of worker metrics over the past [interval] ms.
         """
-        for worker in self.workers:
-            exec_log = self.task_exec_log[(self.task_exec_log["worker_id"]==worker.worker_id) & (self.task_exec_log["exec_end_time"] <= time) & (self.task_exec_log["exec_end_time"] > time-interval)]
-            arrival_log = self.task_arrival_log[(self.task_arrival_log["worker_id"]==worker.worker_id) & (self.task_arrival_log["time"] <= time) & (self.task_arrival_log["time"] > time-interval)]
+        for worker in self.workers.values():
+            exec_log = self.task_exec_log[(self.task_exec_log["worker_id"]==worker.id) & (self.task_exec_log["exec_end_time"] <= time) & (self.task_exec_log["exec_end_time"] > time-interval)]
+            arrival_log = self.task_arrival_log[(self.task_arrival_log["worker_id"]==worker.id) & (self.task_arrival_log["time"] <= time) & (self.task_arrival_log["time"] > time-interval)]
             arrived_workflows = set(arrival_log["workflow_id"])
 
             for wf in arrived_workflows:
@@ -118,14 +136,137 @@ class Simulation(object):
                     arrival_rate = len(worker_task_arrival_log) / interval * 1000
                     throughput = ((exec_log["workflow_id"]==wf) & (exec_log["task_id"]==task)).sum() / interval * 1000
                     self.worker_metrics_log.loc[len(self.worker_metrics_log)] = \
-                        [time, interval, worker.worker_id, wf, task, arrival_rate, throughput]
+                        [time, interval, worker.id, wf, task, arrival_rate, throughput]
 
+    def _get_avg_over_time(self, time: float, time_frame: float, samples: int, get_sample):
+        avg = 0
+        for i in range(samples):
+            sample_start = time - time_frame * (i + 1)
+            sample_end = sample_start + time_frame
 
-    def get_model_from_id(self, model_id: int) -> Model:
-        all_models = [m for ms in list(self.metadata_service.job_type_models.values()) for m in ms]
-        return list(filter(lambda m: m.model_id == model_id, all_models))[0]
+            if sample_start < 0:
+                return avg / i if i > 0 else 0
+
+            avg += get_sample(sample_start, sample_end)
+        return avg / samples
     
+    def get_arrival_rate(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_arrival_rate_at(start, end):
+            jobs = self.task_arrival_log[\
+                    (self.task_arrival_log["workflow_id"]==workflow_id) & \
+                    (self.task_arrival_log["time"] >= start) & \
+                    (self.task_arrival_log["time"] < end)]["job_id"].nunique()
+            return jobs / time_frame * 1000
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_arrival_rate_at)
+
+    def get_drop_rate(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_drop_rate_at(start, end):
+            dropped_jobs = ((self.task_drop_log["workflow_id"]==workflow_id) & \
+                            (self.task_drop_log["drop_time"] >= start) & \
+                            (self.task_drop_log["drop_time"] < end)).sum()
+            drop_rate = dropped_jobs / time_frame * 1000
+            return drop_rate
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_drop_rate_at)
+    
+    def get_throughput(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_tput_at(start, end):
+            complete_jobs = self.task_exec_log[(self.task_exec_log["workflow_id"]==workflow_id) & \
+                            (self.task_exec_log["exec_end_time"] >= start) & \
+                            (self.task_exec_log["exec_end_time"] < end)]["job_id"].nunique()
+            tput = complete_jobs / time_frame * 1000
+            return tput
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_tput_at)
+    
+    def get_goodput(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_gput_at(start, end):
+            nontardy_jobs = self.task_exec_log[(self.task_exec_log["workflow_id"]==workflow_id) & \
+                            (self.task_exec_log["exec_end_time"] >= start) & \
+                            (self.task_exec_log["exec_end_time"] < end) & \
+                            (self.task_exec_log["exec_end_time"] <= self.task_exec_log["deadline"])]["job_id"].nunique()
+            gput = nontardy_jobs / time_frame * 1000
+            return gput
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_gput_at)
+    
+    def get_goodput_throughput_diff(self, time: float, workflow_id: int, time_frame: float, samples: int):
+        def _get_diff_at(start, end):
+            nontardy_jobs = ((self.task_exec_log["workflow_id"]==workflow_id) & \
+                            (self.task_exec_log["exec_end_time"] >= start) & \
+                            (self.task_exec_log["exec_end_time"] < end) & \
+                            (self.task_exec_log["exec_end_time"] < self.task_exec_log["deadline"])).sum()
+            gput = nontardy_jobs / time_frame * 1000
+
+            complete_jobs = ((self.task_exec_log["workflow_id"]==workflow_id) & \
+                            (self.task_exec_log["exec_end_time"] >= start) & \
+                            (self.task_exec_log["exec_end_time"] < end)).sum()
+            tput = complete_jobs / time_frame * 1000
+
+            return tput - gput
+        
+        return self._get_avg_over_time(
+            time, time_frame, samples, _get_diff_at)
+    
+    def add_worker(self, time: float, id: str, memory_size: int, model_ids_to_load: list[int]) -> list[EventOrders]:
+        new_worker = HashTaskWorker(self, id, memory_size, created_at=time)
+        self.workers[new_worker.id] = new_worker
+        self.worker_ids_by_creation.append(new_worker.id)
+
+        events = []
+        for model_id in model_ids_to_load:
+            events += new_worker.fetch_model(self.models[model_id], None, time)
+
+        self.worker_log.loc[len(self.worker_log)] = {
+            "time": time,
+            "add_or_remove": "add",
+            "worker_id": new_worker.id
+        }
+        return events
+    
+    def remove_worker(self, time: float, worker_id: str):
+        worker = self.workers[worker_id]
+        
+        events = []
+
+        # handle currently executing tasks
+        curr_batches = [s.reserved_batch for s in worker.GPU_state.state_at(time)
+                        if s.reserved_batch != None]
+        for batch in curr_batches:
+            evicted_batch = worker.evict_batch(batch.id, time)
+            
+            events.append(EventOrders(
+                time + CPU_to_CPU_delay(sum(t.input_size for t in evicted_batch.tasks)), 
+                TasksArrivalAtScheduler(self, evicted_batch.tasks)))
+        
+        # handle currently queued tasks
+        model_ids = worker.queue_history.keys()
+        for mid in model_ids:
+            task_queue = worker.get_queue_history(time, mid, info_staleness=0)
+            if task_queue:
+                events.append(EventOrders(
+                    time + CPU_to_CPU_delay(sum(t.input_size for t in task_queue)),
+                    TasksArrivalAtScheduler(self, task_queue)))
+
+        self.worker_ids_by_creation.remove(worker_id)
+        self.workers.pop(worker_id)
+
+        self.worker_log.loc[len(self.worker_log)] = {
+            "time": time,
+            "add_or_remove": "remove",
+            "worker_id": worker_id
+        }
+
+        return events
+
     def run_herd_scheduler(self, current_time: float):
+        # TODO: fix
+
         """
             Initializes a new HerdAssignment and stores in [self.herd_assignment].
         """
@@ -136,11 +277,19 @@ class Simulation(object):
                                         j.tasks[0].log.task_arrival_at_scheduler_timestamp <= current_time]
             curr_send_rates[jt] = 5 if current_time == 0 else (len(jobs_since_last_sched) / HERD_PERIODICITY * 1000 + 5) 
             # TODO: minimum send rate? 
-        self.workers = []
+        self.workers = {}
 
         task_types = get_task_types(self.job_types_list)
-        models_by_wf = list(self.metadata_service.job_type_models.values())
-        all_models = [m for jt in self.job_types_list for m in models_by_wf[jt]]
+        print(self.job_types_list)
+        print(task_types)
+
+        #TODO TODO TODO
+        all_models = []
+            # get_model_for_task(self, 0, 0),
+            # get_model_for_task(self, 0, 1),
+            # get_model_for_task(self, 0, 2),
+            # get_model_for_task(self, 0, 3)]
+        # all_models = [m for jt in self.job_types_list for m in models_by_wf[jt]]
         task_tputs = {(0,0): 270, (0,1): 45, (0,2): 270, (0,3): 70,
                         (1,0): 125, (1,1): 7555, (1,2): 92, (1,3): 4.82}
         (group_sizes, stream_groups) = get_herd_assignment(
@@ -158,7 +307,11 @@ class Simulation(object):
                 group_workers = [HeftTaskWorker(self, worker_counter+j, 24, group_id=i) for j in range(int(group_size))]
 
             worker_counter += len(group_workers)
-            self.workers += group_workers
+
+            for grp in group_workers:
+                for w in grp:
+                    self.workers[w.id] = w
+            
             worker_groups.append(group_workers)
 
         task_type_assignments = {}
@@ -168,176 +321,146 @@ class Simulation(object):
         self.herd_assignment = HerdAssignment(worker_groups, task_type_assignments)
         self.allocation_logs.append((current_time, str(self.herd_assignment)))
 
-        if current_time == 0 and ENABLE_MODEL_PREFETCH:
-            for worker in self.workers:
-                # randomly choose a model to prefetch
-                group_model_ids = []
-                if self.simulation_name == "shepherd":
-                    group_model_ids = self.herd_assignment.group_models[worker.group_id]
-                else:
-                    group_model_ids = [get_model_id_for_task_type(tt) for tt in task_types]
+        # TODO load all models in group
+        # if current_time == 0 and ENABLE_MODEL_PREFETCH:
+        #     for worker in self.workers:
+        #         # randomly choose a model to prefetch
+        #         group_model_ids = []
+        #         if self.simulation_name == "shepherd":
+        #             group_model_ids = self.herd_assignment.group_models[worker.group_id]
+        #         else:
+        #             group_model_ids = [get_model_id_for_task_type(tt) for tt in task_types]
 
-                if group_model_ids:
-                    preloaded_model_id = np.random.choice(list(group_model_ids))
-                    preloaded_model = [m for ms in models_by_wf for m in ms if m.model_id == preloaded_model_id][0]
-                    print(f"W{worker.worker_id} PRELOADED {preloaded_model_id}")
-                    worker.GPU_state.prefetch_model(preloaded_model)
+        #         if group_model_ids:
+        #             preloaded_model_id = np.random.choice(list(group_model_ids))
+        #             preloaded_model = [m for ms in models_by_wf for m in ms if m.model_id == preloaded_model_id][0]
+        #             print(f"W{worker.worker_id} PRELOADED {preloaded_model_id}")
+        #             worker.GPU_state.prefetch_model(preloaded_model)
                 
 
-    def initialize_model_placement_at_workers(self) -> list[tuple[int, list[int]]]:
+    def initialize_model_placement_at_workers(self) -> ModelAllocation:
         """
             Returns a list of worker configurations (partition size, [model ids])
-            based on [ALLOCATION_STRATEGY].
+            based on [gcfg.ALLOCATION_STRATEGY].
         """
+        if gcfg.ALLOCATION_STRATEGY == "CUSTOM":
+            assert(all((psize*(10**6)) in gcfg.VALID_WORKER_SIZES for psize, _ in gcfg.CUSTOM_ALLOCATION))
+            return ModelAllocation(
+                self,
+                {uuid.uuid4(): cfg for cfg in gcfg.CUSTOM_ALLOCATION},
+                reset_batch_sizes=False)
+        
+        elif gcfg.ALLOCATION_STRATEGY == "INFERLINE":
+            # TODO: add support for multitenant
+            assert(len(self.workflows) == 1)
+            assert(len(gcfg.CLIENT_CONFIGS) == 1 and len(gcfg.CLIENT_CONFIGS[0].keys()) == 1)
 
-        assert(ALLOCATION_STRATEGY in ["VORTEX", "CUSTOM"])
+            slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
+            alloc = self.inferline.planner_minimize_cost(self, 0, self.workflows[0], slo)
 
-        all_models = list(self.metadata_service.job_type_models.values())
+            return alloc
+        
+        elif gcfg.ALLOCATION_STRATEGY == "VORTEX":
+            # NOTE: no support for multitenant yet
+            assert(len(self.workflows) == 1)
+            assert(len(gcfg.CLIENT_CONFIGS) == 1 and len(gcfg.CLIENT_CONFIGS[0].keys()) == 1)
 
-        # TODO: Make fully configurable
-
-        if ALLOCATION_STRATEGY == "VORTEX":
-            models = ["0,2", "1", "3"] # index in all_models[0]
-            configs = [6, 12, 24]
-            nodes = [i for i in range(TOTAL_NUM_OF_NODES)]
-
-            # ppl1
-            throughput = {
-                "0,2": {6: 200, 12: 240, 24: 270},
-                "1": {24: 45},
-                "3": {6: 55, 12: 55, 24: 70},
-            }
-
-            # ppl2
-            throughput = {
-                '0': {12:71, 24: 125},
-                '1': {6: 5333, 12: 6083 ,24: 7555},
-                '2': {6: 26, 12: 45, 24: 92},
-                '3': {12: 3.9, 24: 4.82}
-            }
-
-            valid_layouts = [[24], [12, 12], [12, 6, 6], [6, 6, 6, 6]]
-
-            def solve_leximin(locked_lower_bounds):
-                m = gp.Model("Leximin_Level")
-                x, y = {}, {}
-                T_m = {}
-                Z = m.addVar(lb=0, vtype=GRB.CONTINUOUS, name="Z")
-
-                for model in models:
-                    for node in nodes:
-                        for c in configs:
-                            if c in throughput[model]:
-                                x[model, node, c] = m.addVar(vtype=GRB.INTEGER, name=f"x_{model}_{node}_{c}")
-
-                for node in nodes:
-                    for lid, layout in enumerate(valid_layouts):
-                        y[node, lid] = m.addVar(vtype=GRB.BINARY, name=f"y_{node}_{lid}")
-
-                for model in models:
-                    T_m[model] = m.addVar(lb=0, vtype=GRB.CONTINUOUS, name=f"T_{model}")
-                    m.addConstr(
-                        T_m[model] == gp.quicksum(
-                            x[model, node, c] * throughput[model][c]
-                            for node in nodes for c in configs if (model, node, c) in x
-                        )
-                    )
-
-                    if model in locked_lower_bounds:
-                        m.addConstr(T_m[model] >= locked_lower_bounds[model])
-                    else:
-                        m.addConstr(Z <= T_m[model])
-
-                    m.addConstr(gp.quicksum(
-                        x[model, node, c] for node in nodes for c in configs if (model, node, c) in x
-                    ) >= 1)
-
-                for node in nodes:
-                    m.addConstr(gp.quicksum(y[node, lid] for lid in range(len(valid_layouts))) == 1)
-                    for c in configs:
-                        m.addConstr(
-                            gp.quicksum(
-                                x[model, node, c] for model in models if (model, node, c) in x
-                            ) <= gp.quicksum(
-                                y[node, lid] * layout.count(c)
-                                for lid, layout in enumerate(valid_layouts)
-                            )
-                        )
-
-                m.setObjective(Z, GRB.MAXIMIZE)
-                m.setParam("OutputFlag", 0)
-                m.optimize()
-
-                throughput_vals = {model: T_m[model].X for model in models}
-                assignment = {
-                    (model, node, c): int(x[model, node, c].X)
-                    for model in models for node in nodes for c in configs
-                    if (model, node, c) in x and x[model, node, c].X > 0.5
-                }
-                return throughput_vals, assignment
-
-            # Leximin loop
-            locked = {}
-            for _ in range(len(models)):
-                T_vals, assignment = solve_leximin(locked)
-                unlocked = [m for m in models if m not in locked]
-                if not unlocked:
-                    break
-                min_model = min(unlocked, key=lambda m: T_vals[m])
-                locked[min_model] = T_vals[min_model]
-
-            # static Gurobi alloc:
-            worker_configs = []
-            for (model_idxs, node, c), count in assignment.items():
-                models = list(map(lambda idx: all_models[0][int(idx)], model_idxs.split(",")))
-                for _ in range(count):
-                    worker_configs.append((c, models))
-                print(f" - Model {model_idxs} assigned {count}x to {node} with MIG {c}GB")
-            return worker_configs
-        elif ALLOCATION_STRATEGY == "CUSTOM":
-            assert(sum(psize for psize, _ in CUSTOM_ALLOCATION) / 24 == TOTAL_NUM_OF_NODES)
-            assert(all((psize*(10**6)) in VALID_WORKER_SIZES for psize, _ in CUSTOM_ALLOCATION))
-            worker_configs = [(psize, [self.get_model_from_id(mid) for mid in mids])
-                              for psize, mids in CUSTOM_ALLOCATION]
-            return worker_configs
+            slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
+            return VortexPlanner.get_allocation(self,
+                                                (gcfg.MIN_NUM_NODES + gcfg.MAX_NUM_NODES) // 2,
+                                                self.workflows[0],
+                                                slo)
+            
+        return None
     
     def initialize_workers(self):
         """
             Creates all workers and initializes model placement.
         """
-        if self.job_split == "PER_TASK":
-            if ALLOCATION_STRATEGY == "HERD":
-                self.run_herd_scheduler(0)
-                self.initialize_external_clients()
-                if HERD_PERIODICITY > 0:
-                    self.event_queue.put(EventOrders(
-                        HERD_PERIODICITY, StartHerdSchedulerRerun(self)))
-            else:
-                worker_configs = self.initialize_model_placement_at_workers()
-                for i, config in enumerate(worker_configs):
-                    if self.simulation_name == "shepherd":
-                        self.workers.append(ShepherdWorker(self, i, config[0], 0))
-                    elif self.simulation_name in ["nexus", "hashtask"]:
-                        self.workers.append(HashTaskWorker(self, i, config[0]))
-                    else:
-                        self.workers.append(HeftTaskWorker(self, i, config[0]))
-                    for model in config[1]:
-                        self.metadata_service.add_model_cached_location(model, i, 0)
-                        self.workers[-1].GPU_state.prefetch_model(model)
+        if gcfg.ALLOCATION_STRATEGY == "HERD":
+            self.run_herd_scheduler(0)
+            self.initialize_external_clients()
+            if gcfg.HERD_PERIODICITY > 0:
+                self.event_queue.put(EventOrders(
+                    gcfg.HERD_PERIODICITY, StartHerdSchedulerRerun(self)))
+        else:
+            self.allocation = self.initialize_model_placement_at_workers()
+            self.workers = {}
+            self.worker_ids_by_creation = []
+            for (wid, _) in self.allocation.worker_ids_by_create_time:
+                cfg = self.allocation.worker_cfgs[wid]
+
+                if self.simulation_name == "shepherd":
+                    worker = ShepherdWorker(self, wid, cfg[0], created_at=0)
+                else:
+                    worker = HashTaskWorker(self, wid, cfg[0], created_at=0)
                 
-                self.herd_assignment = HerdAssignment(
-                    [self.workers],
-                    { tt: 0 for tt in get_task_types(self.job_types_list) })
-                self.initialize_external_clients()
+                self.workers[wid] = worker
+                self.worker_ids_by_creation.append(wid)
+
+                self.worker_log.loc[len(self.worker_log)] = {
+                    "time": 0,
+                    "add_or_remove": "add",
+                    "worker_id": wid
+                }
+
+                for mid in cfg[1]:
+                    self.models[mid].max_batch_size = self.allocation.models[mid].max_batch_size
+                    instance_id = self.workers[wid].GPU_state.prefetch_model(self.models[mid])
+
+                    self.worker_model_log.loc[len(self.worker_model_log)] = {
+                        "start_time": 0,
+                        "end_time": 0, # prefetch special case assume no overhead
+                        "worker_id": wid,
+                        "model_id": mid,
+                        "instance_id": instance_id,
+                        "placed_or_evicted": "placed"
+                    }
+
+            for workflow in self.workflows.values():
+                for model in workflow.get_models():
+                    mcfg.MODELS[model.id]["MAX_BATCH_SIZE"] = self.models[model.id].max_batch_size
+            
+            self.herd_assignment = HerdAssignment(
+                [self.workers.values()],
+                { tt: 0 for tt in get_task_types(self.job_types_list) })
+            self.initialize_external_clients()
 
     def initialize_external_clients(self):
-        for i, client_config in enumerate(CLIENT_CONFIGS):
+        for i, client_config in enumerate(gcfg.CLIENT_CONFIGS):
             self.external_clients.append(
                 ExternalClient(self, i, client_config))
             
+    def generate_models(self):
+        """Initializes ModelData objects for all models used by jobs in [self.job_types_list].
+        """
+        model_ids: set[int] = set()
+        for workflow_cfg in WORKFLOW_LIST:
+            if workflow_cfg["JOB_TYPE"] not in self.job_types_list:
+                continue
+            
+            for task_cfg in workflow_cfg["TASKS"]:
+                if task_cfg["MODEL_ID"] >= 0:
+                    model_ids.add(task_cfg["MODEL_ID"])
+
+        return {id: ModelData(id,
+                              mcfg.MODELS[id]["MODEL_SIZE"],
+                              mcfg.MODELS[id]["MAX_BATCH_SIZE"],
+                              mcfg.MODELS[id]["MIG_BATCH_EXEC_TIMES"],
+                              mcfg.MODELS[id]["EXEC_TIME_CVS"]) 
+                              for id in model_ids}
+
+    
+    def generate_workflows(self) -> list[Workflow]:
+        """Initializes Workflow objects for all job types in [self.job_types_list].
+        """
+        return {
+            cfg["JOB_TYPE"] : Workflow(cfg, self.models, gcfg.SLO_TYPE) for cfg in WORKFLOW_LIST
+            if cfg["JOB_TYPE"] in self.job_types_list}
+            
     def generate_all_jobs(self):
         """
-            Generates exactly the number of jobs specified in [CLIENT_CONFIGS]
+            Generates exactly the number of jobs specified in [gcfg.CLIENT_CONFIGS]
             for each client at the designated send rates and places all creation
             events on the event queue.
         """
@@ -358,7 +481,8 @@ class Simulation(object):
                     
                     next_job = client.create_job(job_type, job_id, curr_send_rate, curr_time)
                     self.jobs[next_job.id] = next_job
-                    curr_time = next_job.create_time + CPU_to_CPU_delay(next_job.tasks[0].input_size)
+                    curr_time = next_job.create_time + CPU_to_CPU_delay(
+                        sum(t.input_size for t in next_job.tasks if len(t.required_task_ids)))
 
                     if self.centralized_scheduler:
                         self.event_queue.put(EventOrders(
@@ -369,6 +493,82 @@ class Simulation(object):
                             curr_time, JobArrivalAtWorker(self, next_job, initial_worker_id)))
                         
                     job_id += 1
+
+    def scale_cluster(self, current_time):
+        if gcfg.AUTOSCALING_POLICY == "NONE":
+            return []
+
+        elif gcfg.AUTOSCALING_POLICY == "INFERLINE":
+            print(f"{current_time} Running InferLine autoscaler...")
+
+            final_delta_workers = {}
+            for workflow in sorted(self.workflows.values()):
+                delta_workers = self.inferline.check_scale_up(current_time, workflow, self)
+                
+                for (id, cfg) in delta_workers:
+                    final_delta_workers[id] = cfg
+                    self.last_scale = current_time
+
+            # print("AFTER SCALE UPS: ", final_delta_workers)
+
+            if current_time - self.last_scale > gcfg.INFERLINE_TUNING_INTERVAL:
+                # check scale down after all scale up checks to prevent removal
+                # of necessary nodes
+                for workflow in sorted(self.workflows.values()):
+                    delta_workers = self.inferline.check_scale_down(current_time, workflow, self)
+                    
+                    for (id, cfg) in delta_workers:
+                        final_delta_workers[id] = cfg
+
+                # print("AFTER SCALE DOWNS: ", final_delta_workers)
+        
+        elif gcfg.AUTOSCALING_POLICY == "VORTEX":
+            if current_time <= 5000 or current_time - self.last_scale <= 5000:
+                return []
+
+            self.last_scale = current_time
+
+            ar = self.get_arrival_rate(current_time, 
+                                       self.workflows[0].id, 
+                                       5 * 1000,
+                                       1)
+            slo = list(gcfg.CLIENT_CONFIGS[0].values())[0]["SLO"]
+            delta_workers = VortexPlanner.check_scale(current_time, self, self.workflows[0], slo, self.allocation, ar)
+            final_delta_workers = {delta_cfg[0]: delta_cfg[1] for delta_cfg in delta_workers}
+
+            # print("AR: ", ar)
+            # print("DIFFS: ", final_delta_workers)
+
+        events = []
+        for id, cfg in final_delta_workers.items():
+            if id in self.workers and cfg: # change loaded models
+                new_models = Counter(cfg[1])
+                curr_models = Counter([s.model.data.id for s in 
+                                        self.workers[id].GPU_state.state_at(current_time)])
+                add_models = list((new_models - curr_models).elements())
+                rm_models = list((curr_models - new_models).elements())
+                
+                events.append(EventOrders(
+                    current_time, 
+                    UpdateLoadedModelsEvent(
+                        self,
+                        self.workers[id],
+                        [self.models[mid] for mid in add_models],
+                        [self.models[mid] for mid in rm_models])))
+            elif id in self.workers: # cfg=None -> rm worker
+                events.append(EventOrders(
+                    current_time,
+                    RemoveWorkerFromCluster(self, id)))
+            else: # add worker
+                events.append(EventOrders(
+                    current_time,
+                    AddWorkerToCluster(self, id, cfg[0], cfg[1])))
+
+        if not events:
+            print("No allocation changes required")
+
+        assert(self.allocation.count(m.id) > 0 for w in self.workflows.values() for m in w.get_models())
+        return events
 
     
     """
@@ -395,24 +595,27 @@ class Simulation(object):
                 stats_dict["clients"][-1][job_type]["throughput_qps"] = _get_jobs_per_sec(completed_jobs)
                 stats_dict["clients"][-1][job_type]["total_num_complete"] = len(completed_jobs)
 
-                if SLO_GRANULARITY == "JOB" or self.simulation_name == "nexus":
-                    nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
-                    stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
+                nontardy_jobs = [j for j in completed_jobs if j.end_time <= j.create_time + j.slo]
+                stats_dict["clients"][-1][job_type]["goodput_qps"] = _get_jobs_per_sec(nontardy_jobs)
 
-                    tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo)]
-                    
-                    stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
+                tardy_jobs = [j for j in completed_jobs if j.end_time > (j.create_time + j.slo)]
+                
+                stats_dict["clients"][-1][job_type]["total_num_tardy"] = len(tardy_jobs)
 
+                if tardy_jobs:
                     job_tardiness = [j.end_time - (j.create_time + j.slo) for j in tardy_jobs]
+
                     stats_dict["clients"][-1][job_type]["median_tardiness_ms"] = np.median(job_tardiness)
                     stats_dict["clients"][-1][job_type]["mean_tardiness_ms"] = np.mean(job_tardiness)
                     stats_dict["clients"][-1][job_type]["std_tardiness_ms"] = np.std(job_tardiness)
 
-                job_latencies = [j.end_time - j.create_time for j in completed_jobs]
+                if completed_jobs:
+                    job_latencies = [j.end_time - j.create_time for j in completed_jobs]
 
-                stats_dict["clients"][-1][job_type]["median_latency_ms"] = np.median(job_latencies)
-                stats_dict["clients"][-1][job_type]["mean_latency_ms"] = np.mean(job_latencies)
-                stats_dict["clients"][-1][job_type]["std_latency_ms"] = np.std(job_latencies)
+                    stats_dict["clients"][-1][job_type]["median_latency_ms"] = np.median(job_latencies)
+                    stats_dict["clients"][-1][job_type]["mean_latency_ms"] = np.mean(job_latencies)
+                    stats_dict["clients"][-1][job_type]["std_latency_ms"] = np.std(job_latencies)
+                    stats_dict["clients"][-1][job_type]["p99_latency_ms"] = np.percentile(job_latencies, 99)
                 
                 client_dropped_jobs = set(self.task_drop_log[self.task_drop_log["client_id"]==client.id]["job_id"])
                 stats_dict["clients"][-1][job_type]["total_num_dropped"] = len(client_dropped_jobs)
@@ -422,37 +625,6 @@ class Simulation(object):
         
         self.sim_stats_log = stats_dict
 
-        # completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
-
-        # # 1. Get the completed job list to compute statistics 
-        # completed_jobs = [j for j in self.jobs.values() if len(
-        #     j.completed_tasks) == len(j.tasks)]
-        # print_end_jobs(last_time, completed_jobs, self.jobs)
-        # # 2. Compute the metrics of interest
-        # response_times = [job.end_time -
-        #                        job.create_time for job in completed_jobs]
-        # slow_down_rate = [(job.end_time - job.create_time) /
-        #                        WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"] for job in completed_jobs]
-        # print_response_time(response_times)
-        # print_slowdown(slow_down_rate)
-        # ADFG_created = []
-        # for job in completed_jobs:
-        #     if job.ADFG not in ADFG_created:
-        #         ADFG_created.append(job.ADFG)
-        #         # print(job.job_type_id , job.ADFG)
-        # print(".... number of DAG created: {}".format(len(ADFG_created)))
-        # print_involved_workers(self.workers)
-        # if by_job_type:
-        #     response_time_per_type = {}
-        #     slow_down_per_type = {}
-        #     for job in completed_jobs:
-        #         if job.job_type_id not in response_time_per_type:
-        #             response_time_per_type[job.job_type_id] = []
-        #             slow_down_per_type[job.job_type_id] = []
-        #         response_time_per_type[job.job_type_id].append(job.end_time - job.create_time)
-        #         slow_down_per_type[job.job_type_id].append((job.end_time - job.create_time) / WORKFLOW_LIST[job.job_type_id]["BEST_EXEC_TIME"])
-        #     # print statistics for each job type
-        #     print_stats_by_job_type(response_time_per_type, slow_down_per_type)
         if self.produce_breakdown:
             all_completed_jobs = [j for j in self.jobs.values() if len(j.completed_tasks) == len(j.tasks)]
             self.produce_time_breakdown_results(all_completed_jobs)
@@ -472,7 +644,7 @@ class Simulation(object):
             slowdown = (completed_job.end_time - completed_job.create_time) / \
                 WORKFLOW_LIST[completed_job.job_type_id]["BEST_EXEC_TIME"]
             response_time = completed_job.end_time - completed_job.create_time
-            dataframe.loc[index] = [completed_job.id, completed_job.client_id, LOAD_INFORMATION_STALENESS, PLACEMENT_INFORMATION_STALENESS, completed_job.job_type_id,
+            dataframe.loc[index] = [completed_job.id, completed_job.client_id, gcfg.LOAD_INFORMATION_STALENESS, gcfg.PLACEMENT_INFORMATION_STALENESS, completed_job.job_type_id,
                                     completed_job.create_time, self.simulation_name, slowdown, response_time]
 
         task_index = 0

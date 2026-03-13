@@ -24,7 +24,7 @@ def CPU_to_CPU_delay(message_size) -> float:
     #     through_put = 12 * 1048.58 # (kB/ms) Using the numbers from Cascade's benchmark
     #     return (message_size / through_put) + FIXED_COST_GROUP_FORMATION
 
-    return message_size / 250000
+    return message_size / 12500 # 25000
 
 
 def SameMachineCPUtoGPU_delay(message_size) -> float:
