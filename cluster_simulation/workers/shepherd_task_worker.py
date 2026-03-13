@@ -27,13 +27,17 @@ class ShepherdWorker(TaskWorker):
         instance_state = self.GPU_state.get_instance_state(instance_id, current_time)
         assert(instance_state.reserved_batch == None or instance_state.reserved_batch.id == old_batch_id)
         
-        evicted_batch = self.evict_batch(old_batch_id, current_time)
+        evicted_batch = None
+        if instance_state.reserved_batch != None:
+            evicted_batch = self.evict_batch(old_batch_id, current_time)
+        
         events, _ = self.batch_execute(new_batch, current_time, instance_id=instance_id)
         assert(events)
         
-        events.append(EventOrders(
-            current_time, 
-            TasksArrivalAtScheduler(self.simulation, evicted_batch.tasks)))
+        if evicted_batch:
+            events.append(EventOrders(
+                current_time, 
+                TasksArrivalAtScheduler(self.simulation, evicted_batch.tasks)))
         return events
 
     #  ---------------------------  Subsequent TASK Transfer   --------------------
@@ -42,11 +46,17 @@ class ShepherdWorker(TaskWorker):
         """
         Send the result of a task to the next worker in the inference pipeline (it may be the same worker)
         """
-        new_tasks = []
+        new_tasks: list[Task] = []
         for task in batch.tasks:
             new_tasks += task.job.newly_available_tasks(task)
-        if len(new_tasks) > 0:
-            return [EventOrders(
-                current_time + CPU_to_CPU_delay(task.result_size), 
-                TasksArrivalAtScheduler(self.simulation, new_tasks))]
-        return []
+
+        events = []
+        for new_task in new_tasks:
+            events.append(EventOrders(
+                max(new_task.job.get_task_by_id(t).log.task_execution_end_timestamp + CPU_to_CPU_delay(
+                        new_task.job.get_task_by_id(t).result_size)
+                    for t in new_task.required_task_ids),
+                TasksArrivalAtScheduler(self.simulation, [new_task])
+            ))
+        
+        return events

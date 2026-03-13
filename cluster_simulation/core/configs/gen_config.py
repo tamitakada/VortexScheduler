@@ -15,8 +15,8 @@ ENABLE_VERIFICATION_DEBUG_LOGGING = True
 """ --------      Worker Machine Parameters      -------- """
 
 GPU_MEMORY_SIZE = 24000000  # in KB, 24GB for NVIDIA A30
-MIN_NUM_NODES = 12
-MAX_NUM_NODES = 12
+MIN_NUM_NODES = 5
+MAX_NUM_NODES = 5
 VALID_WORKER_SIZES = [24000000, 12000000, 6000000]
 
 MAX_NUM_MODELS_PER_NODE = 4
@@ -24,23 +24,31 @@ MAX_NUM_MODELS_PER_NODE = 4
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    # {0: {"NUM_JOBS": 10000,
-    #      "SEND_RATES": [125],
-    #      "SEND_RATE_CHANGE_INTERVALS": [], 
-    #      "SLO": 507}} #1014}}, #np.inf}},
+    {6: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": int(62.5 * 4)}},
+    {7: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": int(70.5 * 4)}},
+    {8: {"NUM_JOBS": 5000,
+         "SEND_RATES": [36],
+         "SEND_RATE_CHANGE_INTERVALS": [], 
+         "SLO": int(80.5 * 4)}},
 
-    {1: {"NUM_JOBS": 5000,
-         "SEND_RATES": [20],#[12],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(256.3*2)}},
-    {4: {"NUM_JOBS": 5000,
-         "SEND_RATES": [8],#[12],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(787.2*2)}},
-    {5: {"NUM_JOBS": 5000,
-         "SEND_RATES": [12],#[12],
-         "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(388.7*2)}},
+    # {1: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(256.3*2)}},
+    # {4: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(787.2*2)}},
+    # {5: {"NUM_JOBS": 5000,
+    #      "SEND_RATES": [8],#[12],
+    #      "SEND_RATE_CHANGE_INTERVALS": [], 
+    #      "SLO": int(388.7*2)}},
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -66,7 +74,7 @@ HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
 # JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
-BOOST_POLICY = "EDF"
+BOOST_POLICY = "FCFS"
 
 """ -------         Inferline Parameters  -------- """
 
@@ -88,14 +96,14 @@ DISPATCH_POLICY = "ROUND_ROBIN" #"HEFT"
 # OPTIMAL | LARGEST
 # [OPTIMAL] Largest batch for which all task SLOs are met
 # [LARGEST] Largest batch <= model max batch size
-BATCH_POLICY = "OPTIMAL"
+BATCH_POLICY = "LARGEST"
 FALLBACK_TO_LARGEST_BATCH = True
 
 # OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
 DROP_POLICY = "LATEST_POSSIBLE"
 
 SLO_SLACK = 0
-SLO_GRANULARITY = "JOB" # TASK | JOB
+SLO_TYPE = "JOB_LEVEL" # JOB_LEVEL | NEXUS
 
 ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
 
@@ -107,19 +115,9 @@ ALLOCATION_STRATEGY = "CUSTOM" #"INFERLINE"
 
 # [(partition size in GB, [model ids])]
 CUSTOM_ALLOCATION = [
- (12, [4]), (6, [5,13]), (6, [5,13]),
- (12, [6]), (12, [6]), 
- (12, [7]), (12, [7]), 
- (12, [7]), (12, [7]),
- (12, [8]), (12, [8]),
- (24, [9]), 
- (24, [9]), 
- (24, [9]), 
- (24, [9]),
- (24, [10]),
- (24, [10]),
- (24, [10])]
-
+    (24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2]),
+    (6, [14]), (6, [15]), (6, [16]), (6, [])
+]
 
 # 12-node mutlitenant ppl 2 (3 versions) alloc
 # [
