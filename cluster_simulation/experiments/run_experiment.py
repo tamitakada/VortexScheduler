@@ -25,19 +25,16 @@ DECENTRALHEFT = 1
 CENTRALHEFT = 2
 HASHTASK = 3
 SHEPHERD = 4
-NEXUS = 5
 
 SCHEDULER_NAMES = bidict({
     DECENTRALHEFT: "decentralheft",
     CENTRALHEFT: "centralheft",
     HASHTASK: "hashtask",
-    SHEPHERD: "shepherd",
-    NEXUS: "nexus"
+    SHEPHERD: "shepherd"
 })
 
 def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str):
-    assert(scheduler_type in [DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD, NEXUS])
-    assert(scheduler_type != NEXUS or gcfg.SLO_GRANULARITY == "TASK") # Nexus requires task-level SLO split
+    assert(scheduler_type in [DECENTRALHEFT, CENTRALHEFT, HASHTASK, SHEPHERD])
     assert(gcfg.BOOST_POLICY == "EDF" or gcfg.BATCH_POLICY != "OPTIMAL") # Optimal policy sorts by deadline
 
     out_path = os.path.join(out_path_root, SCHEDULER_NAMES[scheduler_type])
@@ -76,11 +73,6 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
                                  job_types_list=job_types, 
                                  produce_breakdown=True, 
                                  inferline=Inferline)
-    elif scheduler_type == NEXUS:
-        sim = Simulation_central(simulation_name="nexus",
-                                 job_types_list=job_types, 
-                                 produce_breakdown=True, 
-                                 inferline=Inferline)
 
     sim.run()
 
@@ -91,14 +83,15 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
     sim.result_to_export.to_csv(os.path.join(out_path, "job_breakdown.csv"))
     sim.batch_exec_log.to_csv(os.path.join(out_path, "batch_log.csv"))
     sim.task_drop_log.to_csv(os.path.join(out_path, "drop_log.csv"))
+    sim.task_exec_log.to_csv(os.path.join(out_path, "task_exec_log.csv"))
+    sim.task_arrival_log.to_csv(os.path.join(out_path, "task_arrival_log.csv"))
     sim.worker_model_log.to_csv(os.path.join(out_path, "model_history_log.csv"))
 
     if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
         sim.tput_gput_log.to_csv(os.path.join(out_path, "throughput_goodput_over_time.csv"))
         sim.limit_log.to_csv(os.path.join(out_path, "arrival_rate_limits.csv"))
 
-    if scheduler_type == NEXUS:
-        sim.scheduler.wf_arrival_rate_log.to_csv(os.path.join(out_path, "nexus_job_arrival_rate_log.csv"))
+    if gcfg.SLO_TYPE == "NEXUS":
         sim.scheduler.task_slo_log.to_csv(os.path.join(out_path, "nexus_task_slo_log.csv"))
 
     with open(os.path.join(out_path, "stats.json"), "w") as f:
