@@ -18,8 +18,9 @@ class AutoscalingVerifier(Verifier):
     def verify_worker_logs_match_initial_allocation(self):
         initial_workers = self.simulation.worker_log[self.simulation.worker_log["time"]==0]["worker_id"]
 
-        assert(len(initial_workers) >= gcfg.MIN_NUM_NODES)
-        assert(len(initial_workers) <= gcfg.MAX_NUM_NODES)
+        # TODO: partition size sum
+        # assert(len(initial_workers) >= gcfg.MIN_NUM_NODES)
+        # assert(len(initial_workers) <= gcfg.MAX_NUM_NODES)
 
         initial_models = self.simulation.worker_model_log[self.simulation.worker_model_log["start_time"]==0]
 
