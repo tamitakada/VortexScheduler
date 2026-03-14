@@ -70,7 +70,6 @@ class ShepherdScheduler(Scheduler):
                     continue
 
     def schedule_job_on_arrival(self, job, current_time):
-        # in progress
         # if gcfg.SLO_TYPE == "NEXUS":
         #     if current_time > 1000:
         #         if job.job_type_id not in self.workflow_task_slos:
@@ -160,7 +159,7 @@ class ShepherdScheduler(Scheduler):
                         current_time + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)),
                         BatchArrivalAtWorker(self.simulation, worker, queued_batch, state.model.id)))
                 
-                elif queued_batch.size() >= gcfg.FLEX_LAMBDA * curr_batch.size():
+                elif gcfg.ENABLE_PREEMPTION and queued_batch.size() >= gcfg.FLEX_LAMBDA * curr_batch.size():
                     self.worker_instance_to_batch[(worker.id, state.model.id)] = queued_batch
                     for task in queued_batch.tasks:
                         self.model_queues[state.model.data.id].remove(task)

@@ -19,6 +19,9 @@ class BatchExecutionVerifier(Verifier):
         if self.gcfg.ENABLE_TRACE_VERIFICATION:
             self.verify_event_log()
 
+        if not self.gcfg.ENABLE_PREEMPTION:
+            assert(self.dfs["event_log"]["event"].str.contains("Preemption").sum() == 0)
+
     def _get_job_details(self, job_id: int):
         complete_jobs_rows = self.dfs["job_log"][self.dfs["job_log"]["job_id"]==int(job_id)]
         if len(complete_jobs_rows) > 0:
