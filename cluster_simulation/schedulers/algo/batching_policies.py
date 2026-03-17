@@ -144,7 +144,7 @@ def get_optimal_batch(time: float, partition_size: int, task_queue: list[Task], 
     # batched tasks should not violate deadline
     if len(tasks) > 0:
         proposed_exec_time = task_queue[0].model_data.batch_exec_times[partition_size][len(tasks)]
-        assert(all(t.get_task_deadline() > time + proposed_exec_time for t in tasks))
+        assert(all(t.get_task_deadline() >= time + proposed_exec_time for t in tasks))
 
     if len(tasks) < max_bsize and len(task_queue) > len(tasks):
         if len(tasks) == 0:
