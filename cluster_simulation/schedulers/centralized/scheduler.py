@@ -2,6 +2,9 @@ from core.job import Job
 from core.task import Task
 from core.events.base import *
 
+import pandas as pd
+
+
 class Scheduler:
     """
         Base class for a centralized scheduler.
@@ -10,6 +13,10 @@ class Scheduler:
     def __init__(self, simulation, herd_assignment=None):
         self.simulation = simulation
         self.herd_assignment = herd_assignment
+
+        # Nexus properties
+        self.workflow_task_slos = {} # workflow id -> task id -> (slo, bsize)
+        self.task_slo_log = pd.DataFrame(columns=["time", "workflow_id", "task_id", "slo", "bsize"])
 
     def update_herd_assignment(self, herd_assignment):
         self.herd_assignment = herd_assignment

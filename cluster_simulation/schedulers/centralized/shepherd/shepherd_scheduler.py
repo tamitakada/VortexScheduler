@@ -10,7 +10,7 @@ from core.configs.workflow_config import *
 from workers.worker import Worker
 
 from schedulers.centralized.scheduler import Scheduler
-# from schedulers.algo.nexus_flex_algo import NexusSLOSplitter
+from schedulers.algo.nexus_algo import NexusSLOSplitter
 from schedulers.algo.batching_policies import get_batch
 
 
@@ -70,40 +70,38 @@ class ShepherdScheduler(Scheduler):
                     continue
 
     def schedule_job_on_arrival(self, job, current_time):
-        # if gcfg.SLO_TYPE == "NEXUS":
-        #     if current_time > 1000:
-        #         if job.job_type_id not in self.workflow_task_slos:
-        #             self.workflow_task_slos[job.job_type_id] = NexusSLOSplitter.generate_task_slos(
-        #                 current_time, 1000, self.simulation, self.simulation.workflows[job.job_type_id], job.slo)
+        if gcfg.SLO_TYPE == "NEXUS" or gcfg.SLO_TYPE == "NEXUS_DYNAMIC":
+            if current_time > 1000:
+                if job.job_type_id not in self.workflow_task_slos:
+                    self.workflow_task_slos[job.job_type_id] = NexusSLOSplitter.generate_task_slos(
+                        current_time, 1000, self.simulation, self.simulation.workflows[job.job_type_id], job.slo)
 
-        #             for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
-        #                 self.task_slo_log.loc[len(self.task_slo_log)] = [current_time, 
-        #                                                                  job.job_type_id, 
-        #                                                                  task_id,
-        #                                                                  self.workflow_task_slos[job.job_type_id][task_id][0],
-        #                                                                  self.workflow_task_slos[job.job_type_id][task_id][1]]
+                    for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
+                        self.task_slo_log.loc[len(self.task_slo_log)] = [current_time, 
+                                                                         job.job_type_id, 
+                                                                         task_id,
+                                                                         self.workflow_task_slos[job.job_type_id][task_id][0],
+                                                                         self.workflow_task_slos[job.job_type_id][task_id][1]]
 
-        #         else:
-        #             prev_slos = self.workflow_task_slos[job.job_type_id].copy()
+                elif gcfg.SLO_TYPE == "NEXUS_DYNAMIC":
+                    prev_slos = self.workflow_task_slos[job.job_type_id].copy()
 
-        #             NexusSLOSplitter.redistribute_task_slos(
-        #                 current_time, self.simulation, self.simulation.workflows[job.job_type_id],
-        #                 self.workflow_task_slos[job.job_type_id], 15)
+                    NexusSLOSplitter.redistribute_task_slos(
+                        current_time, self.simulation, self.simulation.workflows[job.job_type_id],
+                        self.workflow_task_slos[job.job_type_id], 15)
                     
-        #             for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
-        #                 if self.workflow_task_slos[job.job_type_id][task_id] != prev_slos[task_id]:
-        #                     self.task_slo_log.loc[len(self.task_slo_log)] = [
-        #                         current_time, job.job_type_id, task_id, 
-        #                         self.workflow_task_slos[job.job_type_id][task_id][0],
-        #                         self.workflow_task_slos[job.job_type_id][task_id][1]]
+                    for task_id in sorted(self.workflow_task_slos[job.job_type_id].keys()):
+                        if self.workflow_task_slos[job.job_type_id][task_id] != prev_slos[task_id]:
+                            self.task_slo_log.loc[len(self.task_slo_log)] = [
+                                current_time, job.job_type_id, task_id, 
+                                self.workflow_task_slos[job.job_type_id][task_id][0],
+                                self.workflow_task_slos[job.job_type_id][task_id][1]]
 
-        #     for task in job.tasks:
-        #         if job.job_type_id in self.workflow_task_slos:
-        #             task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
-        #             task.model_data.max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
-        #             self.simulation.models[task.model_data.id].max_batch_size = self.workflow_task_slos[job.job_type_id][task.task_id][1]
-        #         else:
-        #             task.slo = np.inf
+            for task in job.tasks:
+                if job.job_type_id in self.workflow_task_slos:
+                    task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
+                else:
+                    task.slo = job.slo
 
         return self.schedule_tasks_on_arrival(
             [t for t in job.tasks if len(t.required_task_ids) == 0], current_time)
@@ -118,6 +116,9 @@ class ShepherdScheduler(Scheduler):
             # skip any dropped tasks
             if (self.simulation.task_drop_log["job_id"] == task.job.id).any():
                 continue
+
+            if gcfg.SLO_TYPE == "NEXUS":
+                task.deadline = current_time + task.slo
 
             if task.model_data.id not in self.model_queues:
                 self.model_queues[task.model_data.id] = []
@@ -148,6 +149,9 @@ class ShepherdScheduler(Scheduler):
                 if (worker.id, state.model.id) not in self.worker_instance_to_batch:
                     self.worker_instance_to_batch[(worker.id, state.model.id)] = None
                 
+                if not queued_batch:
+                    continue
+
                 curr_batch = self.worker_instance_to_batch[(worker.id, state.model.id)]
 
                 if not curr_batch:
@@ -188,7 +192,7 @@ class ShepherdScheduler(Scheduler):
                                     worker.total_memory, 
                                     self.model_queues[completed_batch.model_data.id])
         
-        if candidate_batch.size() > 0:
+        if candidate_batch:
             self.worker_instance_to_batch[(worker.id, instance_id)] = candidate_batch
             for task in candidate_batch.tasks:
                 self.model_queues[completed_batch.model_data.id].remove(task)

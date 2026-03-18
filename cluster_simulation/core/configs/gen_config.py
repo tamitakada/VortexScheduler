@@ -25,17 +25,17 @@ MAX_NUM_MODELS_PER_NODE = 4
 
 CLIENT_CONFIGS = [ # in ms
     {6: {"NUM_JOBS": 5000,
-         "SEND_RATES": [36],
+         "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(62.5 * 4)}},
+         "SLO": int(62.48 * 2)}},
     {7: {"NUM_JOBS": 5000,
-         "SEND_RATES": [36],
+         "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(70.5 * 4)}},
+         "SLO": int(70.48 * 2)}},
     {8: {"NUM_JOBS": 5000,
-         "SEND_RATES": [36],
+         "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
-         "SLO": int(80.5 * 4)}},
+         "SLO": int(80.48 * 2)}},
 
     # {1: {"NUM_JOBS": 5000,
     #      "SEND_RATES": [8],#[12],
@@ -67,6 +67,7 @@ RESCHEDULE_THREASHOLD = 1.5
 FLEX_LAMBDA = 3.03
 HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
+ENABLE_PREEMPTION = True
 
 
 """  -------        Boost Parameters  --------- """
@@ -74,7 +75,7 @@ HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
 BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
 # JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
-BOOST_POLICY = "FCFS"
+BOOST_POLICY = "EDF"
 
 """ -------         Inferline Parameters  -------- """
 
@@ -96,14 +97,14 @@ DISPATCH_POLICY = "ROUND_ROBIN" #"HEFT"
 # OPTIMAL | LARGEST
 # [OPTIMAL] Largest batch for which all task SLOs are met
 # [LARGEST] Largest batch <= model max batch size
-BATCH_POLICY = "LARGEST"
-FALLBACK_TO_LARGEST_BATCH = True
+BATCH_POLICY = "OPTIMAL"
+FALLBACK_TO_LARGEST_BATCH = False
 
 # OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
 DROP_POLICY = "LATEST_POSSIBLE"
 
 SLO_SLACK = 0
-SLO_TYPE = "JOB_LEVEL" # JOB_LEVEL | NEXUS
+SLO_TYPE = "NEXUS" # JOB_LEVEL | NEXUS
 
 ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
 

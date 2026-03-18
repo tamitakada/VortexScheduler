@@ -12,6 +12,7 @@ from schedulers.algo.inferline_planner_algo import Inferline
 
 from verification.autoscaling import AutoscalingVerifier
 from verification.batch_execution_verifier import BatchExecutionVerifier
+from verification.drop_verifier import DropVerifier
 
 import core.configs.gen_config as gcfg
 import core.configs.model_config as mcfg
@@ -91,7 +92,7 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
         sim.tput_gput_log.to_csv(os.path.join(out_path, "throughput_goodput_over_time.csv"))
         sim.limit_log.to_csv(os.path.join(out_path, "arrival_rate_limits.csv"))
 
-    if gcfg.SLO_TYPE == "NEXUS":
+    if gcfg.SLO_TYPE == "NEXUS" or gcfg.SLO_TYPE == "NEXUS_DYNAMIC":
         sim.scheduler.task_slo_log.to_csv(os.path.join(out_path, "nexus_task_slo_log.csv"))
 
     with open(os.path.join(out_path, "stats.json"), "w") as f:
@@ -110,17 +111,20 @@ def run_experiment(scheduler_type: int, job_types: list[int], out_path_root: str
     if gcfg.ENABLE_VERIFICATION:
         #AutoscalingVerifier(sim).run_verifier()
 
-        BatchExecutionVerifier(
-            {
-                "worker_log": sim.worker_log,
-                "model_log": sim.worker_model_log,
-                "batch_log": sim.batch_exec_log,
-                "drop_log": sim.task_drop_log,
-                "event_log": sim.event_log,
-                "job_log": sim.result_to_export
-            },
-            gcfg, mcfg, wcfg
-        ).run_verifier()
+        logs = {
+            "worker_log": sim.worker_log,
+            "model_log": sim.worker_model_log,
+            "batch_log": sim.batch_exec_log,
+            "drop_log": sim.task_drop_log,
+            "event_log": sim.event_log,
+            "job_log": sim.result_to_export,
+            "slo_log": sim.scheduler.task_slo_log if gcfg.SLO_TYPE != "JOB_LEVEL" else None,
+            "arrival_log": sim.task_arrival_log,
+            "exec_log": sim.task_exec_log
+        }
+
+        DropVerifier(logs, gcfg, mcfg, wcfg).run_verifier()
+        BatchExecutionVerifier(logs, gcfg, mcfg, wcfg).run_verifier()
 
 
 if __name__ == "__main__":

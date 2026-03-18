@@ -14,13 +14,12 @@ class BatchExecutionVerifier(Verifier):
     def run_verifier(self):
         self.verify_batch_sizes()
         self.verify_task_completion()
-        self.verify_drops()
-
-        if self.gcfg.ENABLE_TRACE_VERIFICATION:
-            self.verify_event_log()
 
         if not self.gcfg.ENABLE_PREEMPTION:
             assert(self.dfs["event_log"]["event"].str.contains("Preemption").sum() == 0)
+
+        if self.gcfg.ENABLE_TRACE_VERIFICATION:
+            self.verify_event_log()
 
     def _get_job_details(self, job_id: int):
         complete_jobs_rows = self.dfs["job_log"][self.dfs["job_log"]["job_id"]==int(job_id)]
@@ -84,79 +83,6 @@ class BatchExecutionVerifier(Verifier):
 
             assert(abs(row["response_time"] - \
                         (task_rows["end_time"].max() - row["job_create_time"])) < 0.001)
-
-    def verify_drops(self):
-        if self.gcfg.DROP_POLICY == "NONE":
-            assert(len(self.dfs["drop_log"]) == 0)
-            return
-        
-        assert(self.gcfg.SLO_TYPE == "JOB_LEVEL")
-        if self.gcfg.DROP_POLICY == "LATEST_POSSIBLE":
-            # all tasks should still be valid before being batched
-            job_deadlines = {}
-            for i, row in self.dfs["batch_log"].iterrows():
-                job_ids = row["job_ids"] if type(row["job_ids"]) == list else \
-                    [int(sjid) for sjid in row["job_ids"].strip("[] ").split(",")]
-                for job_id in job_ids:
-                    if job_id not in job_deadlines:
-                        job_info = self._get_job_details(job_id)
-                        slo = self.gcfg.CLIENT_CONFIGS[int(job_info["client_id"])][job_info["workflow_type"]]["SLO"]
-                        job_deadlines[job_id] = slo + job_info["job_create_time"]
-
-                if row["start_time"] > job_deadlines[job_id]:
-                    print(row)
-    
-                assert(row["start_time"] <= job_deadlines[job_id])
-
-            # all dropped tasks must have been invalid at drop
-            for i, row in self.dfs["drop_log"].iterrows():
-                job_id = int(row["job_id"])
-                if job_id not in job_deadlines:
-                    job_info = self._get_job_details(job_id)
-                    slo = self.gcfg.CLIENT_CONFIGS[int(job_info["client_id"])][job_info["workflow_type"]]["SLO"]
-                    job_deadlines[job_id] = slo + job_info["job_create_time"]
-
-                assert(row["drop_time"] >= job_deadlines[job_id])
-        
-        elif self.gcfg.DROP_POLICY == "OPTIMAL":
-            # all tasks should still be valid before being batched
-            job_deadlines = {}
-            job_exec_statuses = {} # job id -> task id -> completion time
-            for i, row in self.dfs["batch_log"].sort_values(by="start_time").iterrows():
-                job_ids = [int(sjid) for sjid in row["job_ids"].strip("[] ").split(",")]
-                for job_id in job_ids:
-                    if job_id not in job_exec_statuses:
-                        job_exec_statuses[job_id] = {}
-
-                    job_info = self._get_job_details(job_id)
-                    if job_id not in job_deadlines:
-                        slo = self.gcfg.CLIENT_CONFIGS[int(job_info["client_id"])][job_info["workflow_type"]]["SLO"]
-                        job_deadlines[job_id] = slo + job_info["job_create_time"]
-    
-                    min_rem_proc_time = self.workflows[job_info["workflow_type"]].get_processing_time(
-                        lambda at: 0 if (at.model_data.id in job_exec_statuses[job_id] and \
-                                         job_exec_statuses[job_id][at.model_data.id] <= row["start_time"]) \
-                                     else at.model_data.batch_exec_times[24][1])
-                    
-                    assert(row["start_time"] + min_rem_proc_time <= job_deadlines[job_id])
-
-                    job_exec_statuses[job_id][row["model_id"]] = row["end_time"]
-
-            # all dropped tasks must have been invalid at drop
-            for i, row in self.dfs["drop_log"].iterrows():
-                job_id = int(row["job_id"])
-                job_info = self._get_job_details(job_id)
-                if job_id not in job_deadlines:
-                    slo = self.gcfg.CLIENT_CONFIGS[int(job_info["client_id"])][job_info["workflow_type"]]["SLO"]
-                    job_deadlines[job_id] = slo + job_info["job_create_time"]
-
-                min_rem_proc_time = self.workflows[job_info["workflow_type"]].get_processing_time(
-                    lambda at: 0 if (job_id in job_exec_statuses and at.model_data.id in job_exec_statuses[job_id] and \
-                                     job_exec_statuses[job_id][at.model_data.id] <= row["drop_time"]) \
-                                 else at.model_data.batch_exec_times[24][1])
-
-                assert(row["drop_time"] + min_rem_proc_time > job_deadlines[job_id])
-
 
     def verify_event_log(self):
         worker_queues = {} # worker id -> model id -> [(job id, task id)]

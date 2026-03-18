@@ -30,8 +30,8 @@ class Task(object):
 
     def get_task_deadline(self):
         if gcfg.SLO_TYPE == "NEXUS":
-            assert(self.slo != None)
-            return self.log.task_placed_on_worker_queue_timestamp + self.slo * (1 + gcfg.SLO_SLACK)
+            assert(self.deadline != None)
+            return self.deadline
         else:
             return self.log.job_creation_timestamp + self.job.slo * (1 + gcfg.SLO_SLACK)
 
