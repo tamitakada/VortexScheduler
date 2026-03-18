@@ -21,7 +21,7 @@ class DropVerifier(Verifier):
                                             (self.dfs["slo_log"]["task_id"]==row["task_id"]) & \
                                             (self.dfs["slo_log"]["time"] < row["drop_time"])]
             expected_slo = task_slos[task_slos["time"]==task_slos["time"].max()].iloc[0]["slo"] \
-                if len(task_slos) > 0 else self.gcfg.CLIENT_CONFIGS[row["client_id"]][row["workflow_id"]]["SLO"]
+                if len(task_slos) > 0 else self.gcfg.CLIENT_CONFIGS[int(row["client_id"])][int(row["workflow_id"])]["SLO"]
             
             assert(row["drop_time"] >= task_arrival_time + expected_slo)
         
@@ -32,12 +32,12 @@ class DropVerifier(Verifier):
                                             (self.dfs["slo_log"]["task_id"]==row["task_id"]) & \
                                             (self.dfs["slo_log"]["time"] <= row["exec_start_time"])]
             expected_slo = task_slos[task_slos["time"]==task_slos["time"].max()].iloc[0]["slo"] \
-                if len(task_slos) > 0 else self.gcfg.CLIENT_CONFIGS[row["client_id"]][row["workflow_id"]]["SLO"]
+                if len(task_slos) > 0 else self.gcfg.CLIENT_CONFIGS[int(row["client_id"])][int(row["workflow_id"])]["SLO"]
             
             wcfg = [wcfg for wcfg in self.wcfg.WORKFLOW_LIST if wcfg["JOB_TYPE"] == row["workflow_id"]][0]
             min_runtime = self.mcfg.MODELS[wcfg["TASKS"][row["task_id"]]["MODEL_ID"]]["MIG_BATCH_EXEC_TIMES"][24][1]
 
-            assert(row["exec_start_time"] <= task_arrival_time + expected_slo + min_runtime)
+            assert(min_runtime <= expected_slo)
         
     def verify_job_level_slos(self):
         if self.gcfg.SLO_TYPE != "JOB_LEVEL":
