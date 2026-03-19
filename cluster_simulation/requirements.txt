@@ -1,0 +1,7 @@
+bidict
+gurobipy
+matplotlib
+numpy
+pandas
+scipy
+seaborn

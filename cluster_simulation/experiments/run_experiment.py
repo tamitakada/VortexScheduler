@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask", "nexus"])
+    parser.add_argument("-t", "--scheduler-type", type=str, required=True, choices=["centralheft", "decentralheft", "shepherd", "hashtask"])
     parser.add_argument("-o", "--out", type=str, default="results", help="Path to output directory")
     
     args = parser.parse_args()
