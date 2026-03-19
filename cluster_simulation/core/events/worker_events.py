@@ -50,6 +50,9 @@ class TaskArrival(Event):
         # log tracking for this task
         self.task.log.set_task_placed_on_worker_queue_timestamp(current_time)
         self.simulation.add_task_arrival_to_worker_metrics(current_time, self.task, self.worker)
+
+        if gcfg.SLO_TYPE == "NEXUS":
+            self.task.deadline = current_time + self.task.slo
         
         if gcfg.AUTOSCALING_POLICY != "NONE" and (self.worker.id not in self.simulation.workers or \
             (self.task.model_data != None and \
@@ -84,6 +87,9 @@ class TasksArrival(Event):
         for task in relevant_tasks:
             task.log.set_task_placed_on_worker_queue_timestamp(current_time)
             self.simulation.add_task_arrival_to_worker_metrics(current_time, task, self.worker)
+
+            if gcfg.SLO_TYPE == "NEXUS":
+                task.deadline = current_time + task.slo
 
         if gcfg.AUTOSCALING_POLICY != "NONE":
             events = []

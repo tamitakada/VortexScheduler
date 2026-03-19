@@ -1,30 +1,40 @@
 from core.network import *
 
-import core.configs.gen_config as gcfg
-import core.configs.model_config as mcfg
-
-from core.configs.workflow_config import *
-
-from core.simulation import Simulation
 from verification.verifier import Verifier
 
 from collections import Counter
 
 import re
 import uuid
+import math
 
 
 class BatchExecutionVerifier(Verifier):
-
-    def __init__(self, simulation: Simulation):
-        super().__init__(simulation)
     
     def run_verifier(self):
         self.verify_batch_sizes()
-        self.verify_event_log()
+        self.verify_task_completion()
+
+        if not self.gcfg.ENABLE_PREEMPTION:
+            assert(self.dfs["event_log"]["event"].str.contains("Preemption").sum() == 0)
+
+        if self.gcfg.ENABLE_TRACE_VERIFICATION:
+            self.verify_event_log()
 
     def _get_job_details(self, job_id: int):
-        return self.simulation.result_to_export[self.simulation.result_to_export["job_id"]==int(job_id)].iloc[0]
+        complete_jobs_rows = self.dfs["job_log"][self.dfs["job_log"]["job_id"]==int(job_id)]
+        if len(complete_jobs_rows) > 0:
+            return complete_jobs_rows.iloc[0]
+
+        dropped_job_rows = self.dfs["drop_log"][self.dfs["drop_log"]["job_id"]==int(job_id)]
+        if len(dropped_job_rows) > 0:
+            # standardize naming with breakdown log
+            dropped_job_rows.rename(columns={"create_time": "job_create_time",
+                                             "workflow_id": "workflow_type"}, 
+                                    inplace=True)
+            return dropped_job_rows.iloc[0]
+        
+        raise ValueError(f"Job {job_id} not found in drop or breakdown logs")
 
     def _tasks_are_returned_to_scheduler(self, time: float, max_transfer_time: float, tasks: list[tuple[int, int]]):
         """Verify that given tasks all arrive at scheduler within some time interval.
@@ -35,9 +45,9 @@ class BatchExecutionVerifier(Verifier):
             tasks: [(job ID, task ID)] of tasks to check
         """
         
-        task_arrivals = self.simulation.event_log[(self.simulation.event_log["time"] > time) & \
-                    (self.simulation.event_log["time"] <= time + max_transfer_time) & \
-                    (self.simulation.event_log["event"].str.contains("Tasks Arrival at Scheduler"))]
+        task_arrivals = self.dfs["event_log"][(self.dfs["event_log"]["time"] > time) & \
+                    (self.dfs["event_log"]["time"] <= time + max_transfer_time) & \
+                    (self.dfs["event_log"]["event"].str.contains("Tasks Arrival at Scheduler"))]
         arrived_tasks = []
         for _, ta in task_arrivals.iterrows():
             res = re.search(r"Job ID, Task ID: \[([^\]]*)\]", ta["event"])
@@ -48,10 +58,35 @@ class BatchExecutionVerifier(Verifier):
             self.debug_assert(
                 [job_id, task_id] in arrived_tasks,
                 f"Job {job_id} Task {task_id} should be sent back to scheduler")
+            
+    def verify_task_completion(self):
+        for i, row in self.dfs["job_log"].iterrows():
+            job_id = row["job_id"]
+
+            if type(self.dfs["batch_log"]["job_ids"]) == str:
+                relevant_rows = self.dfs["batch_log"]["job_ids"].str.contains(f"( |\\[){job_id}(,|\\])", na=False)
+            else:
+                relevant_rows = self.dfs["batch_log"]["job_ids"].apply(lambda x: job_id in x)
+     
+            task_rows = self.dfs["batch_log"][relevant_rows]
+            req_model_id_to_count = {}
+            
+            rwcfg = [w for w in self.wcfg.WORKFLOW_LIST if w["JOB_TYPE"]==row["workflow_type"]]
+            for tcfg in rwcfg[0]["TASKS"]:
+                if tcfg["MODEL_ID"] not in req_model_id_to_count:
+                    req_model_id_to_count[tcfg["MODEL_ID"]] = 0
+                req_model_id_to_count[tcfg["MODEL_ID"]] += 1
+
+            for model_id in req_model_id_to_count.keys():
+                assert(
+                    (task_rows["model_id"]==model_id).sum() == req_model_id_to_count[model_id])
+
+            assert(abs(row["response_time"] - \
+                        (task_rows["end_time"].max() - row["job_create_time"])) < 0.001)
 
     def verify_event_log(self):
-        worker_queues = {}
-        for i, row in self.simulation.worker_log[self.simulation.worker_log["time"]==0].iterrows():
+        worker_queues = {} # worker id -> model id -> [(job id, task id)]
+        for i, row in self.dfs["worker_log"][self.dfs["worker_log"]["time"]==0].iterrows():
             if row["add_or_remove"] == "add":
                 worker_queues[row["worker_id"]] = {}
             elif row["add_or_remove"] == "remove":
@@ -63,7 +98,7 @@ class BatchExecutionVerifier(Verifier):
                 raise AssertionError(f"Unrecognized value {row['add_or_remove']} in worker_log")
         
         worker_models = {wid: [] for wid in worker_queues.keys()}
-        for i, row in self.simulation.worker_model_log[self.simulation.worker_model_log["start_time"]==0].iterrows():
+        for i, row in self.dfs["model_log"][self.dfs["model_log"]["start_time"]==0].iterrows():
             self.debug_assert(
                 row["worker_id"] in worker_models,
                 f'Worker {row["worker_id"]} not logged in worker_log')
@@ -79,11 +114,16 @@ class BatchExecutionVerifier(Verifier):
         # (time, worker ID, model ID, instance ID)
         model_fetch_events = []
 
-        for i, row in self.simulation.event_log.sort_values(by="time", kind="mergesort").iterrows():  
-            if gcfg.ENABLE_VERIFICATION_DEBUG_LOGGING:
-                print(f"[STEP {i} OF TRACE]\n\tTIME: {row['time']}\n")
-                print(f"\tCURRENT WORKER QUEUES: {worker_queues}\n")
-                print(f"\tCURRENT WORKER MODELS: {worker_models}\n")
+        window_size = self.gcfg.VERIFICATION_WINDOW_SIZE if hasattr(self.gcfg, "VERIFICATION_WINDOW_SIZE") else 10000
+        total_events = min(window_size, len(self.dfs["event_log"]))
+        for i, row in self.dfs["event_log"].sort_values(by="time", kind="mergesort").iterrows():  
+            if i >= total_events:
+                break
+            
+            if self.gcfg.ENABLE_VERIFICATION_DEBUG_LOGGING:
+                print(f"[STEP {i} OF TRACE] {round(i / total_events * 100, 3)}% done\n\tTIME: {row['time']}\n")
+                # print(f"\tCURRENT WORKER QUEUES: {worker_queues}\n")
+                # print(f"\tCURRENT WORKER MODELS: {worker_models}\n")
                 print(f"\tNEXT EVENT TO PROCESS: {row['event']}")
 
             # model fetch events may need to be preempted due to lack of separate logging
@@ -92,6 +132,16 @@ class BatchExecutionVerifier(Verifier):
                 if time <= row["time"]:
                     worker_models[wid].append((mid, iid, None))
                     model_fetch_events.pop(j)
+
+            # remove dropped jobs from consideration
+            drop_events = self.dfs["drop_log"][self.dfs["drop_log"]["drop_time"] <= row["time"]]
+            for j, drop_row in drop_events.iterrows():
+                for wqueue in worker_queues.values():
+                    for mqueue in wqueue.values():
+                        for k, (jid, _) in enumerate(mqueue):
+                            if jid == drop_row["job_id"]:
+                                mqueue.pop(k)
+                                break # never >1 instance of same job on single model queue
 
             if "Job Arrival" in row["event"]:
                 job_id = int(re.search(r"Job ([0-9]+)", row["event"]).group(1))
@@ -107,19 +157,19 @@ class BatchExecutionVerifier(Verifier):
                     row["time"] > job_details["job_create_time"],
                     f'Job created at {job_details["job_create_time"]} <= arrival at {row["time"]}')
 
-                job_workflow = self.simulation.workflows[job_details["workflow_type"]]
+                job_workflow = self.workflows[job_details["workflow_type"]]
                 arrived_jobs[job_id] = { # log completion status of job tasks
                     tid: 0 for tid in job_workflow.tasks.keys()
                 }
 
                 # all initial tasks should arrive at workers soon after
-                expected_initial_task_ids = [t.id for t in self.simulation.workflows[job_details["workflow_type"]].initial_tasks]
+                expected_initial_task_ids = [t.id for t in self.workflows[job_details["workflow_type"]].initial_tasks]
                 for id in expected_initial_task_ids:
                     event_name = f"Task Arrival \\(Job {job_id} - Task {id}\\)"
                     self.debug_assert(
-                        ((self.simulation.event_log["time"] > row["time"]) & \
-                         (self.simulation.event_log["time"] <= row["time"] + max_transfer_time) & \
-                         (self.simulation.event_log["event"].str.contains(event_name))).sum() > 0,
+                        ((self.dfs["event_log"]["time"] > row["time"]) & \
+                         (self.dfs["event_log"]["time"] <= row["time"] + max_transfer_time) & \
+                         (self.dfs["event_log"]["event"].str.contains(event_name))).sum() > 0,
                         f"Job {job_id} initial task {id} arrival event not found"
                     )
 
@@ -129,7 +179,7 @@ class BatchExecutionVerifier(Verifier):
                 job_id = int(res.group(1))
                 workflow_id = self._get_job_details(job_id)["workflow_type"]
                 task_id = int(res.group(2))
-                model_id = self.simulation.workflows[workflow_id].tasks[task_id].model_data.id
+                model_id = self.workflows[workflow_id].tasks[task_id].model_data.id
 
                 # checks if worker has model/will fetch model
                 # if not assume outdated arrival, tasks will be sent back (should only happen due to downscale)
@@ -146,20 +196,23 @@ class BatchExecutionVerifier(Verifier):
                     f"Job {job_id} arrival not logged by time of task {task_id} arrival")
 
                 # dependencies should all be completed already
-                if self.simulation.workflows[workflow_id].tasks[task_id].prev_tasks:
+                if self.workflows[workflow_id].tasks[task_id].prev_tasks:
                     self.debug_assert(
                         all(arrived_jobs[job_id][t.id] == 2
-                            for t in self.simulation.workflows[workflow_id].tasks[task_id].prev_tasks),
+                            for t in self.workflows[workflow_id].tasks[task_id].prev_tasks),
                         f'Job {job_id} Task {task_id} arrived but deps are missing')
+                
+                if self.dfs["drop_log"][self.dfs["drop_log"]["drop_time"] <= row["time"]]["job_id"].isin([job_id]).any():
+                    continue
 
                 worker_queues[row["worker_id"]][model_id].append((job_id, task_id))
                 
                 # if available instance exists, should begin batch immediately
                 if any(m == model_id and batch == None for (m, _, batch) in worker_models[row["worker_id"]]):
                     self.debug_assert(
-                        ((self.simulation.event_log["worker_id"]==row["worker_id"]) & \
-                         (self.simulation.event_log["time"]==row["time"]) & \
-                         (self.simulation.event_log["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
+                        ((self.dfs["event_log"]["worker_id"]==row["worker_id"]) & \
+                         (self.dfs["event_log"]["time"]==row["time"]) & \
+                         (self.dfs["event_log"]["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
                         f"Idle model {model_id} on worker {row['worker_id']}: \
                             {worker_models[row['worker_id']]}\n{worker_queues[row['worker_id']][model_id]}")
             
@@ -180,7 +233,7 @@ class BatchExecutionVerifier(Verifier):
                     task_id = task[1]
 
                     workflow_id = self._get_job_details(job_id)["workflow_type"]
-                    model_id = self.simulation.workflows[workflow_id].tasks[task_id].model_data.id
+                    model_id = self.workflows[workflow_id].tasks[task_id].model_data.id
 
                     # checks if worker has model/will fetch model
                     # if not assume outdated arrival in event of downscale (per model)
@@ -202,20 +255,23 @@ class BatchExecutionVerifier(Verifier):
                         f"Job {job_id} Task {task_id} is either in progress or complete already")
 
                     # dependencies should all be completed already
-                    if self.simulation.workflows[workflow_id].tasks[task_id].prev_tasks:
+                    if self.workflows[workflow_id].tasks[task_id].prev_tasks:
                         self.debug_assert(
                             all(arrived_jobs[job_id][t.id] == 2
-                                for t in self.simulation.workflows[workflow_id].tasks[task_id].prev_tasks),
+                                for t in self.workflows[workflow_id].tasks[task_id].prev_tasks),
                             f'Job {job_id} Task {task_id} arrived but deps are missing')
+                        
+                    if self.dfs["drop_log"][self.dfs["drop_log"]["drop_time"] <= row["time"]]["job_id"].isin([job_id]).any():
+                        continue
 
                     worker_queues[row["worker_id"]][model_id].append((job_id, task_id))
 
                     # if available instance exists, should begin batch immediately
                     if any(m == model_id and batch == None for (m, _, batch) in worker_models[row["worker_id"]]):
                         self.debug_assert(
-                            ((self.simulation.event_log["worker_id"]==row["worker_id"]) & \
-                            (self.simulation.event_log["time"]==row["time"]) & \
-                            (self.simulation.event_log["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
+                            ((self.dfs["event_log"]["worker_id"]==row["worker_id"]) & \
+                            (self.dfs["event_log"]["time"]==row["time"]) & \
+                            (self.dfs["event_log"]["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
                             f"Idle model {model_id} on worker {row['worker_id']}: \
                                 {worker_models[row['worker_id']]}\n{worker_queues[row['worker_id']][model_id]}")
 
@@ -227,10 +283,10 @@ class BatchExecutionVerifier(Verifier):
                 worker_models[worker_id] = []
                 worker_queues[worker_id] = {}
                 
-                model_loads = self.simulation.worker_model_log[\
-                    (self.simulation.worker_model_log["worker_id"]==worker_id) & \
-                    (self.simulation.worker_model_log["placed_or_evicted"]=="placed") & \
-                    (self.simulation.worker_model_log["start_time"]==row["time"])]
+                model_loads = self.dfs["model_log"][\
+                    (self.dfs["model_log"]["worker_id"]==worker_id) & \
+                    (self.dfs["model_log"]["placed_or_evicted"]=="placed") & \
+                    (self.dfs["model_log"]["start_time"]==row["time"])]
                 
                 for _, mrow in model_loads.iterrows():
                     model_fetch_events.append(
@@ -246,8 +302,8 @@ class BatchExecutionVerifier(Verifier):
                 assert(worker_id in worker_models)
 
                 # removal is successful: never executes any more batches
-                assert(((self.simulation.batch_exec_log["worker_id"]==worker_id) & \
-                        (self.simulation.batch_exec_log["start_time"] > row["time"])).sum() == 0)
+                assert(((self.dfs["batch_log"]["worker_id"]==worker_id) & \
+                        (self.dfs["batch_log"]["start_time"] > row["time"])).sum() == 0)
 
                 tasks_to_send_back = []
                 for queued_tids in worker_queues[worker_id].values():
@@ -269,9 +325,9 @@ class BatchExecutionVerifier(Verifier):
                 rm_models = [int(x) for x in res.group(2).split(", ") if x]
 
                 tasks_to_send_back = []
-                worker_updates = self.simulation.worker_model_log[\
-                    (self.simulation.worker_model_log["worker_id"]==row["worker_id"]) & \
-                    (self.simulation.worker_model_log["start_time"]==row["time"])]
+                worker_updates = self.dfs["model_log"][\
+                    (self.dfs["model_log"]["worker_id"]==row["worker_id"]) & \
+                    (self.dfs["model_log"]["start_time"]==row["time"])]
                 for _, mrow in worker_updates.iterrows():
                     if mrow["placed_or_evicted"] == "placed":
                         # should match with event log
@@ -316,9 +372,9 @@ class BatchExecutionVerifier(Verifier):
 
                 if len(worker_queues[uuid.UUID(worker_id)][model_id]) > 0:
                     self.debug_assert(
-                        ((self.simulation.event_log["worker_id"]==row["worker_id"]) & \
-                         (self.simulation.event_log["time"]==row["time"]) & \
-                         (self.simulation.event_log["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
+                        ((self.dfs["event_log"]["worker_id"]==row["worker_id"]) & \
+                         (self.dfs["event_log"]["time"]==row["time"]) & \
+                         (self.dfs["event_log"]["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
                         f"Idle model {model_id} on worker {row['worker_id']}: \
                             {worker_models[row['worker_id']]}\n{worker_queues[row['worker_id']][model_id]}")
 
@@ -326,7 +382,7 @@ class BatchExecutionVerifier(Verifier):
                 res = re.search(r"Batch ([^ ]+) (Start|End) \(Jobs (.*)\) at Worker", row["event"])
                 batch_id = uuid.UUID(res.group(1))
                 batched_jobs = [int(x) for x in res.group(3).split(",")]
-                batch_log = self.simulation.batch_exec_log[self.simulation.batch_exec_log["batch_id"]==batch_id]
+                batch_log = self.dfs["batch_log"][self.dfs["batch_log"]["batch_id"].astype(str)==str(batch_id)]
                 model_id = batch_log.iloc[0]["model_id"] if len(batch_log) > 0 else int(re.search(r"Model ([0-9]+)", row["event"]).group(1))
 
                 if len(batch_log) == 0:
@@ -334,18 +390,18 @@ class BatchExecutionVerifier(Verifier):
 
                     # batch was abandoned, tasks should have been returned to scheduler during exec
                     # model assigned to batch must be evicted at some point
-                    model_eviction_event = ((self.simulation.worker_model_log["worker_id"] == row["worker_id"]) & \
-                        (self.simulation.worker_model_log["model_id"] == model_id) & \
-                        (self.simulation.worker_model_log["placed_or_evicted"] == "evicted") & \
-                        (self.simulation.worker_model_log["start_time"] > row["time"])).sum() > 0
-                    worker_removal_event = ((self.simulation.worker_log["worker_id"] == row["worker_id"]) & \
-                        (self.simulation.worker_log["time"] > row["time"]) & \
-                        (self.simulation.worker_log["add_or_remove"] == "remove")).sum() > 0
+                    model_eviction_event = ((self.dfs["model_log"]["worker_id"] == row["worker_id"]) & \
+                        (self.dfs["model_log"]["model_id"] == model_id) & \
+                        (self.dfs["model_log"]["placed_or_evicted"] == "evicted") & \
+                        (self.dfs["model_log"]["start_time"] > row["time"])).sum() > 0
+                    worker_removal_event = ((self.dfs["worker_log"]["worker_id"] == row["worker_id"]) & \
+                        (self.dfs["worker_log"]["time"] > row["time"]) & \
+                        (self.dfs["worker_log"]["add_or_remove"] == "remove")).sum() > 0
                     
                     assert(model_eviction_event or worker_removal_event)
 
-                    task_arrivals = self.simulation.event_log[(self.simulation.event_log["time"] > row["time"]) & \
-                                                              (self.simulation.event_log["event"].str.contains("Tasks Arrival at Scheduler"))]
+                    task_arrivals = self.dfs["event_log"][(self.dfs["event_log"]["time"] > row["time"]) & \
+                                                              (self.dfs["event_log"]["event"].str.contains("Tasks Arrival at Scheduler"))]
                     future_arrived_jobs = []
                     for _, ta in task_arrivals.iterrows():
                         res1 = re.search(r"Job ID, Task ID: \[([^\]]*)\]", ta["event"])
@@ -369,7 +425,7 @@ class BatchExecutionVerifier(Verifier):
                                 idx = j
 
                                 # task is batched for correct model
-                                assert(self.simulation.workflows[\
+                                assert(self.workflows[\
                                     self._get_job_details(int(jid))["workflow_type"]].tasks[tid_1].model_data.id == \
                                     model_id)
                                 
@@ -413,9 +469,9 @@ class BatchExecutionVerifier(Verifier):
                     # if queued tasks for model, should start next batch immediately
                     if len(worker_queues[row["worker_id"]][batch_log["model_id"]]) > 0:
                         self.debug_assert(
-                            ((self.simulation.event_log["worker_id"]==row["worker_id"]) & \
-                            (self.simulation.event_log["time"]==row["time"]) & \
-                            (self.simulation.event_log["event"].str.contains(f"Batch .* Start .* Model {batch_log['model_id']}"))).sum() > 0,
+                            ((self.dfs["event_log"]["worker_id"]==row["worker_id"]) & \
+                            (self.dfs["event_log"]["time"]==row["time"]) & \
+                            (self.dfs["event_log"]["event"].str.contains(f"Batch .* Start .* Model {batch_log['model_id']}"))).sum() > 0,
                             f"Idle model {batch_log['model_id']} on worker {row['worker_id']}: \
                                 {worker_models[row['worker_id']]}\n{worker_queues[row['worker_id']][batch_log['model_id']]}")
 
@@ -424,29 +480,67 @@ class BatchExecutionVerifier(Verifier):
                         workflow_id = self._get_job_details(int(jid))["workflow_type"]
                         for tid in arrived_jobs[int(jid)].keys():
                             if arrived_jobs[int(jid)][tid] == 1 and \
-                                self.simulation.workflows[workflow_id].tasks[tid].model_data.id == batch_log["model_id"]:
+                                self.workflows[workflow_id].tasks[tid].model_data.id == batch_log["model_id"]:
 
                                 arrived_jobs[int(jid)][tid] = 2
                                 found_job_task = True
                                 break
                         assert(found_job_task)
 
-            elif gcfg.ENABLE_VERIFICATION_DEBUG_LOGGING:
+                elif "Arrival" in row["event"]:
+                    res = re.search(r"Job ID, Task ID: \[([^\]]*)\]", row["event"])
+                    task_details = [[int(sid) for sid in s.strip("() ").split(", ")] for s in res.group(1).split("), ")]
+
+                    # task arrival should not precede job arrival
+                    self.debug_assert(
+                        job_id in arrived_jobs,
+                        f"Job {job_id} arrival not logged by time of task {task_id} arrival")
+
+                    # task should not be started
+                    self.debug_assert(
+                        arrived_jobs[job_id][task_id] == 0,
+                        f"Job {job_id} Task {task_id} is either in progress or complete already")
+
+                    # dependencies should all be completed already
+                    if self.workflows[workflow_id].tasks[task_id].prev_tasks:
+                        self.debug_assert(
+                            all(arrived_jobs[job_id][t.id] == 2
+                                for t in self.workflows[workflow_id].tasks[task_id].prev_tasks),
+                            f'Job {job_id} Task {task_id} arrived but deps are missing')
+                        
+                    if self.dfs["drop_log"][self.dfs["drop_log"]["drop_time"] <= row["time"]]["job_id"].isin([job_id]).any():
+                        continue
+
+                    worker_queues[row["worker_id"]][model_id].append((job_id, task_id))
+
+                    # if available instance exists, should begin batch immediately
+                    if any(m == model_id and batch == None for (m, _, batch) in worker_models[row["worker_id"]]):
+                        self.debug_assert(
+                            ((self.dfs["event_log"]["worker_id"]==row["worker_id"]) & \
+                            (self.dfs["event_log"]["time"]==row["time"]) & \
+                            (self.dfs["event_log"]["event"].str.contains(f"Batch .* Start .* Model {model_id}"))).sum() > 0,
+                            f"Idle model {model_id} on worker {row['worker_id']}: \
+                                {worker_models[row['worker_id']]}\n{worker_queues[row['worker_id']][model_id]}")
+
+                else:
+                    print(f"Unchecked event: {row['event']}")
+
+            elif self.gcfg.ENABLE_VERIFICATION_DEBUG_LOGGING:
                 print(f"Unchecked event: {row['event']}")       
         
-        if gcfg.DROP_POLICY == "NONE":
+        if self.gcfg.DROP_POLICY == "NONE":
             assert(all(t_stat == 2 for t_stat in j_stat.values()) for j_stat in arrived_jobs.values())
         
         assert(all(batch == None for (_, _, batch) in worker_models[wid]) for wid in worker_models.keys())
 
     def verify_batch_sizes(self):
-        model_ids = set(self.simulation.batch_exec_log["model_id"])
+        model_ids = set(self.dfs["batch_log"]["model_id"])
         for model_id in model_ids:
-            batch_log = self.simulation.batch_exec_log[self.simulation.batch_exec_log["model_id"]==model_id]
+            batch_log = self.dfs["batch_log"][self.dfs["batch_log"]["model_id"]==model_id]
 
             self.debug_assert(
-                (batch_log["batch_size"] <= self.simulation.models[model_id].max_batch_size).all(),
-                f"Some batch for model {model_id} had batch size > {self.simulation.models[model_id].max_batch_size}")
+                (batch_log["batch_size"] <= self.models[model_id].max_batch_size).all(),
+                f"Some batch for model {model_id} had batch size > {self.models[model_id].max_batch_size}")
             
             self.debug_assert(
                 (batch_log["batch_size"] > 0).all(),

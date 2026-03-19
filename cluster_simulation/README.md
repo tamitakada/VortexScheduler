@@ -17,4 +17,4 @@ User can set customized system configurations in /core/configs/.
 #### 2.2 Run simulation
 Run the python file, /experiments/run_experiment.py, to start the simulation and generate log files. Defaults to `{CURRENT_DIR}/results` if path to output directory `-o` is not specified.
 
-``` python run_experiment.py -t {centralheft,decentralheft,hashtask,shepherd,nexus} [-o OUT] ```
+``` python run_experiment.py -t {centralheft,decentralheft,hashtask,shepherd} [-o OUT] ```

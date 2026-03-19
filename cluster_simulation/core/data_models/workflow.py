@@ -29,6 +29,8 @@ class Workflow:
 
             if len(cfg["PREV_TASK_INDEX"]) == 0:
                 self.initial_tasks.append(task)
+
+        assert(len(self.initial_tasks) > 0)
         
         for cfg in workflow_cfg["TASKS"]:
             task = self.tasks[cfg["TASK_INDEX"]]
