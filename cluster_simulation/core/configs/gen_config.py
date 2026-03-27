@@ -2,6 +2,12 @@ import numpy as np
 
 """ --------      Simulation Parameters      -------- """
 
+DROP_RATE = {
+    6: 0.3,
+    7: 0.3,
+    8: 0.3
+}
+
 PRODUCE_EVENT_LOG = True
 
 # Runs a trace of produced event logs to verify simulator actions
@@ -24,15 +30,15 @@ MAX_NUM_MODELS_PER_NODE = 4
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    {6: {"NUM_JOBS": 5000,
+    {6: {"NUM_JOBS": 1000,
          "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
          "SLO": int(62.48 * 2)}},
-    {7: {"NUM_JOBS": 5000,
+    {7: {"NUM_JOBS": 1000,
          "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
          "SLO": int(70.48 * 2)}},
-    {8: {"NUM_JOBS": 5000,
+    {8: {"NUM_JOBS": 1000,
          "SEND_RATES": [40],
          "SEND_RATE_CHANGE_INTERVALS": [], 
          "SLO": int(80.48 * 2)}},
@@ -97,14 +103,14 @@ DISPATCH_POLICY = "ROUND_ROBIN" #"HEFT"
 # OPTIMAL | LARGEST
 # [OPTIMAL] Largest batch for which all task SLOs are met
 # [LARGEST] Largest batch <= model max batch size
-BATCH_POLICY = "OPTIMAL"
+BATCH_POLICY = "LARGEST"
 FALLBACK_TO_LARGEST_BATCH = False
 
 # OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
-DROP_POLICY = "LATEST_POSSIBLE"
+DROP_POLICY = "NONE"
 
 SLO_SLACK = 0
-SLO_TYPE = "NEXUS" # JOB_LEVEL | NEXUS
+SLO_TYPE = "JOB_LEVEL" # JOB_LEVEL | NEXUS
 
 ENABLE_MULTITHREADING = True # allow multiple models on same partition to run at once
 

@@ -6,6 +6,10 @@ from core.events.worker_events import *
 from schedulers.centralized.scheduler import Scheduler
 from schedulers.algo.nexus_algo import NexusSLOSplitter
 
+import numpy as np
+
+rng = np.random.default_rng(seed=42)
+
 
 class HashTaskScheduler(Scheduler):
     """
@@ -21,6 +25,16 @@ class HashTaskScheduler(Scheduler):
         self.last_change = 0
 
     def schedule_job_on_arrival(self, job, current_time):
+        if gcfg.DROP_RATE and job.job_type_id in gcfg.DROP_RATE:
+            if rng.binomial(n=1, p=gcfg.DROP_RATE[job.job_type_id]):
+                return [EventOrders(
+                        current_time, 
+                        SchedulerDropJob(
+                            self.simulation, 
+                            job, 
+                            job.tasks[0], 
+                            job.tasks[0].get_task_deadline()))]
+        
         if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
             if current_time > 3000:
                 curr_ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 1)
