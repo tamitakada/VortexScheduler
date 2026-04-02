@@ -9,76 +9,162 @@ import argparse
 
 from scipy.stats import linregress
 
+WORKFLOW_TYPE_TO_EXEC_TIME = {
+    6: 62.5,
+    7: 70.5,
+    8: 80.5,
+}
 
-def plot_response_time_tail_cdf(srcs: list[tuple[str, str]], split_by_workflow: bool, 
+def plot_response_time_tail_cdf(srcs: list[tuple[str, str]], split_by_workflow: bool,
                                 save_fig: bool, out_path: str):
-    workflow_colors = [
-        sns.light_palette("purple", n_colors=len(srcs)+1)[1:],
-        sns.light_palette("orange", n_colors=len(srcs)+1)[1:],
-        sns.light_palette("red", n_colors=len(srcs)+1)[1:],
-        sns.light_palette("blue", n_colors=len(srcs)+1)[1:]
-    ]
+    palette = sns.color_palette("tab10", len(srcs))
 
-    workflow2color = {}
-    
     max_res = 0
-    for (dir, _) in srcs:
+    loaded_srcs = []
+
+    # Load and preprocess all sources once
+    for dir, name in srcs:
         data = pd.read_csv(os.path.join(dir, "job_breakdown.csv"))
-        max_res = max(max_res, int(data["response_time"].max()) + 1)
+
+        drop_path = os.path.join(dir, "drop_log.csv")
+        if os.path.exists(drop_path):
+            for _, dropped_row in pd.read_csv(drop_path).iterrows():
+                data.loc[len(data)] = {
+                    "workflow_type": dropped_row["workflow_id"],
+                    "job_create_time": dropped_row["create_time"],
+                    "response_time": np.inf
+                }
+
+        finite_max = data.loc[np.isfinite(data["response_time"]), "response_time"]
+        if len(finite_max) > 0:
+            max_res = max(max_res, int(finite_max.max()) + 1)
+
+        loaded_srcs.append((name, data))
 
     thresholds = np.arange(0, max_res, 1)
 
-    plt.figure(figsize=(8, 6))
+    if split_by_workflow:
+        # collect all workflows across all loaded dataframes
+        all_workflows = sorted(set().union(*[
+            set(data["workflow_type"]) for name, data in loaded_srcs
+        ]))
+        n = len(all_workflows)
 
-    for i, (dir, name) in enumerate(srcs):
+        fig, axes = plt.subplots(1, n, figsize=(4 * n, 6))
+
+        if n == 1:
+            axes = [axes]
+
+        wf2ax = {wf: ax for wf, ax in zip(all_workflows, axes)}
+
+        for ax, wf in zip(axes, all_workflows):
+            ax.set_title(f"Workflow {wf}")
+            ax.set_yscale("log")
+            ax.grid(True, which="both")
+
+        for i, (name, data) in enumerate(loaded_srcs):
+            workflows = sorted(set(data["workflow_type"]))
+
+            for wf in workflows:
+                ax = wf2ax[wf]
+
+                subset = data.loc[data["workflow_type"] == wf, "response_time"].values
+                cdf = np.array([(subset > t).mean() for t in thresholds])
+                cdf[cdf == 0] = np.nan
+
+                ax.plot(
+                    thresholds,
+                    cdf,
+                    label=name,
+                    color=palette[i],
+                )
+
+        for ax in axes:
+            ax.legend()
+
+        axes[-1].set_xlabel("Response time (ms)")
+        plt.tight_layout()
+
+    else:
+        plt.figure(figsize=(8, 6))
+
+        for i, (name, data) in enumerate(loaded_srcs):
+            cdf = np.array([(data["response_time"] > t).mean() for t in thresholds])
+            cdf[cdf == 0] = np.nan
+
+            plt.plot(thresholds, cdf, label=name)
+
+        plt.xlabel("Response time (ms)")
+        plt.ylabel("Tail CDF")
+        plt.title("Tail CDF")
+        plt.grid(True, which="both")
+        plt.yscale("log")
+        plt.legend()
+        plt.tight_layout()
+
+    if save_fig:
+        plt.savefig(out_path)
+    else:
+        plt.show()
+
+
+def plot_slo_as_job_size_vs_tail_cdf(srcs: list[tuple[str, str]], save_fig: bool, out_path: str):
+    # TODO: For now we fix workflow execution times.
+    palette = sns.color_palette("tab10", len(srcs))
+
+    max_res = 0
+    loaded_srcs = []
+
+    # Load and preprocess all sources once
+    for dir, name in srcs:
         data = pd.read_csv(os.path.join(dir, "job_breakdown.csv"))
 
-        for _, dropped_row in pd.read_csv(os.path.join(dir, "drop_log.csv")).iterrows():
-            data.loc[len(data)] = {
-                "workflow_type": dropped_row["workflow_id"],
-                "job_create_time": dropped_row["create_time"],
-                "response_time": np.inf
-            }
+        drop_path = os.path.join(dir, "drop_log.csv")
+        if os.path.exists(drop_path):
+            for _, dropped_row in pd.read_csv(drop_path).iterrows():
+                data.loc[len(data)] = {
+                    "workflow_type": dropped_row["workflow_id"],
+                    "job_create_time": dropped_row["create_time"],
+                    "response_time": np.inf
+                }
 
-        if split_by_workflow:
-            workflows = sorted(set(data["workflow_type"]))
-            for wf in workflows:
-                if wf not in workflow2color:
-                    if workflow2color:
-                        workflow2color[wf] = max(workflow2color.values())+1
-                    else:
-                        workflow2color[wf] = 0
+        finite_max = data.loc[np.isfinite(data["response_time"]), "response_time"]
+        if len(finite_max) > 0:
+            max_res = max(max_res, int(finite_max.max()) + 1)
 
-                cdf = np.array([(data[data["workflow_type"]==wf]["response_time"] > t).mean() for t in thresholds])
+        loaded_srcs.append((name, data))
 
-                log_cdf = np.log10(cdf)
-                log_cdf[cdf == 0] = np.nan
-
-                plt.plot(thresholds, log_cdf, 
-                         label=f"{name}: Workflow {wf}", 
-                         color=workflow_colors[workflow2color[wf]][i])
-        else:
-            cdf = np.array([(data["response_time"] > t).mean() for t in thresholds])
-
-            log_cdf = np.log(cdf)
-            log_cdf[cdf == 0] = np.nan
-
-            plt.plot(thresholds, log_cdf, label=name)
-
-            # thresh_masked = np.arange(150, 200, 10)
-            # m, b, _, _, _ = linregress(
-            #     thresh_masked, 
-            #     np.array([(data["response_time"] > t).mean() for t in thresh_masked]))
-            # print("SLOPE IS ", m)
-
-    plt.xlabel('Response time (ms)')
-    plt.ylabel('log10(tail CDF)')
-    plt.title('Tail CDF')
-    plt.grid(True)
+    thresholds = np.linspace(0, 8, 200)
+    for i, (name, data) in enumerate(loaded_srcs):
+        cts = None
+        workflows = sorted(set(data['workflow_type']))
+        for wf in workflows:
+            subset = data.loc[data['workflow_type'] == wf, 'response_time'].values
+            if cts is None:
+                cts = np.array([(subset > t * WORKFLOW_TYPE_TO_EXEC_TIME[wf]).sum() for t in thresholds])
+            else:
+                cts += np.array([(subset > t * WORKFLOW_TYPE_TO_EXEC_TIME[wf]).sum() for t in thresholds])
+            
+        cdf = cts / len(data)
+        cdf[cdf == 0] = np.nan
+        plt.plot(
+            thresholds,
+            cdf,
+            label=name,
+            color=palette[i],
+        )
+    
+    plt.xlabel('Response time as multiple of job size')
+    plt.ylabel('Tail CDF (log)')
+    plt.yscale('log')
+    plt.grid(True, which='both')
     plt.legend()
+    plt.tight_layout()
 
-    if save_fig: plt.savefig(out_path)
-    else: plt.show()
+    if save_fig:
+        plt.savefig(out_path)
+    else:
+        plt.show()
 
 
 if __name__ == "__main__":
@@ -94,10 +180,16 @@ if __name__ == "__main__":
                         help="Split by workflow")
     parser.add_argument("--out", type=str,
                         help="Output directory path for saved figures")
+    parser.add_argument("--slo-as-job-size", action="store_true",
+                        help="Plot SLO as multiple of job size instead of absolute response time")
 
     args = parser.parse_args()
 
     srcs = [(args.srcs[i], args.labels[i]) for i in range(len(args.srcs))]
 
-    plot_response_time_tail_cdf(srcs, args.split, args.pdf, 
+    if args.slo_as_job_size:
+        plot_slo_as_job_size_vs_tail_cdf(srcs, args.pdf, 
+                                        args.out if args.out else "slo_as_job_size_tail.pdf")
+    else:
+        plot_response_time_tail_cdf(srcs, args.split, args.pdf, 
                                 args.out if args.out else ("tail_by_workflow.pdf" if args.split else "tail_agg.pdf"))
