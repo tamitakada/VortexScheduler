@@ -11,6 +11,7 @@ from collections import Counter
 
 import core.configs.model_config as mcfg
 import core.configs.gen_config as gcfg
+
 from core.print_utils import *
 from core.external_client import *
 from core.data_models.workflow import Workflow
@@ -85,6 +86,8 @@ class Simulation(object):
 
         self.allocation_logs = []
 
+        self.queue_size_samples = pd.DataFrame(columns=["time", "worker_id", "model_id", "queue_size"])
+
         print("---- SIMULATION : " + self.simulation_name + "----")
         self.produce_breakdown =  produce_breakdown
 
@@ -122,21 +125,19 @@ class Simulation(object):
         """
         Log a new sample of worker metrics over the past [interval] ms.
         """
-        for worker in self.workers.values():
-            exec_log = self.task_exec_log[(self.task_exec_log["worker_id"]==worker.id) & (self.task_exec_log["exec_end_time"] <= time) & (self.task_exec_log["exec_end_time"] > time-interval)]
-            arrival_log = self.task_arrival_log[(self.task_arrival_log["worker_id"]==worker.id) & (self.task_arrival_log["time"] <= time) & (self.task_arrival_log["time"] > time-interval)]
-            arrived_workflows = set(arrival_log["workflow_id"])
 
-            for wf in arrived_workflows:
-                wf_arrival_log = arrival_log[arrival_log["workflow_id"]==wf]
-                arrived_tasks = set(wf_arrival_log["task_id"])
-
-                for task in arrived_tasks:
-                    worker_task_arrival_log = wf_arrival_log[wf_arrival_log["task_id"]==task]
-                    arrival_rate = len(worker_task_arrival_log) / interval * 1000
-                    throughput = ((exec_log["workflow_id"]==wf) & (exec_log["task_id"]==task)).sum() / interval * 1000
-                    self.worker_metrics_log.loc[len(self.worker_metrics_log)] = \
-                        [time, interval, worker.id, wf, task, arrival_rate, throughput]
+        all_model_ids = sorted([m.id for w in self.workflows.values() for m in w.get_models()])
+        
+        if self.simulation_name == "shepherd":
+            for model_id in all_model_ids:
+                self.queue_size_samples.loc[len(self.queue_size_samples)] = [
+                    time, "N/A", model_id, len(self.scheduler.model_queues[model_id])]
+        
+        else:
+            for worker in self.workers.values():
+                for model_id in all_model_ids:
+                    self.queue_size_samples.loc[len(self.queue_size_samples)] = [
+                        time, worker.id, model_id, worker.get_queue_size(time, model_id)]
 
     def _get_avg_over_time(self, time: float, time_frame: float, samples: int, get_sample):
         avg = 0

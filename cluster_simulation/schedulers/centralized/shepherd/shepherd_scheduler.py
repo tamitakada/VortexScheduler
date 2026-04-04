@@ -14,6 +14,7 @@ from schedulers.algo.nexus_algo import NexusSLOSplitter
 from schedulers.algo.batching_policies import get_batch
 
 import numpy as np
+import scipy
 
 rng = np.random.default_rng(seed=42)
 
@@ -29,6 +30,8 @@ class ShepherdScheduler(Scheduler):
         self.model_queues = {}
         self.worker_instance_to_batch = {} # (worker_id, instance_id) -> batch
         self.last_worker_idx = 0 # for round robin tracking
+
+        self.last_update = 0
 
     def update_herd_assignment(self, herd_assignment):
         super().update_herd_assignment(herd_assignment)
@@ -116,6 +119,24 @@ class ShepherdScheduler(Scheduler):
                     task.slo = self.workflow_task_slos[job.job_type_id][task.task_id][0]
                 else:
                     task.slo = job.slo
+
+        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT" and current_time - self.last_update > 1000:
+            for task in [t for t in job.tasks if len(t.required_task_ids) == 0]:
+                samples = self.simulation.queue_size_samples[(self.simulation.queue_size_samples["model_id"]==task.model_data.id) & \
+                                                             (current_time - self.simulation.queue_size_samples["time"] <= 1000)]
+                if len(samples) < 2:
+                    break
+
+                slope, intercept, r, p, se = scipy.stats.linregress(samples["time"], samples["queue_size"])
+                is_overloaded = (slope > 0) and (p < 0.05)
+
+                if is_overloaded:
+                    if job.job_type_id not in gcfg.DROP_RATE:
+                        gcfg.DROP_RATE[job.job_type_id] = 0.01
+                    else:
+                        gcfg.DROP_RATE[job.job_type_id] *= 2
+                    
+                    self.last_update = current_time
 
         return self.schedule_tasks_on_arrival(
             [t for t in job.tasks if len(t.required_task_ids) == 0], current_time)

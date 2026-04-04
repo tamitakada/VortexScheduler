@@ -15,6 +15,7 @@ from schedulers.algo.batching_policies import get_batch
 
 import random
 import math
+import scipy
 
 
 class HashTaskWorker(TaskWorker):
@@ -270,6 +271,11 @@ class HashTaskWorker(TaskWorker):
                         self.rm_task_in_queue_history(task, current_time)
                 return batch_events
         return []
+    
+    def get_queue_size(self, current_time: float, model_id: int) -> bool:
+        task_queue = [task for task in self.get_queue_history(current_time, model_id, info_staleness=0)
+                      if current_time >= task.log.task_placed_on_worker_queue_timestamp]
+        return len(task_queue)
 
     #  ---------------------------  Subsequent TASK Transfer   --------------------
 

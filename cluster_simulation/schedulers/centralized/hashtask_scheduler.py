@@ -7,6 +7,7 @@ from schedulers.centralized.scheduler import Scheduler
 from schedulers.algo.nexus_algo import NexusSLOSplitter
 
 import numpy as np
+import scipy
 
 rng = np.random.default_rng(seed=42)
 
@@ -23,6 +24,7 @@ class HashTaskScheduler(Scheduler):
         self.last_worker_idx = {}
 
         self.last_change = 0
+        self.last_update = 0
 
     def schedule_job_on_arrival(self, job, current_time):
         if gcfg.DROP_RATE and job.job_type_id in gcfg.DROP_RATE:
@@ -34,45 +36,6 @@ class HashTaskScheduler(Scheduler):
                             job, 
                             job.tasks[0], 
                             job.tasks[0].get_task_deadline()))]
-        
-        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT":
-            if current_time > 3000:
-                curr_ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 1)
-                ar = self.simulation.get_arrival_rate(current_time, job.job_type_id, 1000, 3)
-                tput = self.simulation.get_throughput(current_time, job.job_type_id, 1000, 3)
-                gput = self.simulation.get_goodput(current_time, job.job_type_id, 1000, 3)
-
-                self.simulation.tput_gput_log.loc[len(self.simulation.tput_gput_log)] = [current_time, job.job_type_id, ar, tput, gput]
-
-                relevant_limits = self.simulation.limit_log[self.simulation.limit_log["workflow_id"]==job.job_type_id]
-                
-                sys_limit = -1 if len(relevant_limits) == 0 else relevant_limits.loc[relevant_limits["time"].idxmax(), "limit"]
-
-                if sys_limit <= 0 or (self.last_change >= 0 and current_time - self.last_change > 1000 and ar < sys_limit): 
-                    if ar - tput > 3:
-                        sys_limit = ar - 0.25 * (ar - tput)
-                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
-                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
-                        self.last_change = -1
-                    elif tput - gput > 3:
-                        sys_limit = ar - 0.25 * (ar - gput)
-                        self.simulation.limit_log.loc[len(self.simulation.limit_log)] = {
-                            "time": current_time, "workflow_id": job.job_type_id, "limit": sys_limit}
-                        self.last_change = -1
-                
-                # set last_change = first time arrival rate is detected to have responded to latest system limit
-                if curr_ar < sys_limit and self.last_change < 0:
-                    self.last_change = current_time
-        
-                if sys_limit > 0 and curr_ar > sys_limit:
-                    return [EventOrders(
-                        current_time, 
-                        SchedulerDropJob(
-                            self.simulation, 
-                            job, 
-                            job.tasks[0], 
-                            job.create_time + job.slo,
-                            reason=SchedulerDropJob._ARRIVAL_RATE_CAP))]
 
         if gcfg.SLO_TYPE == "NEXUS" or gcfg.SLO_TYPE == "NEXUS_DYNAMIC":
             if current_time > 1000:
@@ -114,6 +77,28 @@ class HashTaskScheduler(Scheduler):
         task_arrival_events = []
 
         initial_tasks = [task for task in job.tasks if len(task.required_task_ids) == 0]
+
+        if gcfg.DROP_POLICY == "CLUSTER_ADMISSION_LIMIT" and current_time - self.last_update > 1000:
+            for task in initial_tasks:
+                worker_index = task.ADFG[task.task_id]
+
+                samples = self.simulation.queue_size_samples[(self.simulation.queue_size_samples["model_id"]==task.model_data.id) & \
+                                                             (self.simulation.queue_size_samples["worker_id"]==self.simulation.workers[worker_index].id) & \
+                                                             (current_time - self.simulation.queue_size_samples["time"] <= 1000)]
+                if len(samples) < 2:
+                    break
+
+                slope, intercept, r, p, se = scipy.stats.linregress(samples["time"], samples["queue_size"])
+                is_overloaded = (slope > 0) and (p < 0.05)
+
+                if is_overloaded:
+                    if job.job_type_id not in gcfg.DROP_RATE:
+                        gcfg.DROP_RATE[job.job_type_id] = 0.01
+                    else:
+                        gcfg.DROP_RATE[job.job_type_id] *= 2
+                    
+                    self.last_update = current_time
+
         for task in initial_tasks:
             task_arrival_time = current_time # + CPU_to_CPU_delay(task.input_size)
             worker_index = task.ADFG[task.task_id]
