@@ -1,142 +1,288 @@
+import core.configs.gen_config as gcfg
+
+from queue import PriorityQueue
+from queue_management.queued_task import QueuedTask
+from queue_management.batching import TaskBatcher
+
+from events.event_manager import EventManager
+from events.event import *
+from events.event_types import *
+
 from core.network import *
 from core.data_models.model_data import ModelData
 from core.batch import Batch
-from core.events.worker_events import *
-from core.events.base import *
 
 from workers.gpu_state import ModelState, GPUState
+from schedulers.algo.batching_policies import get_batch
+
+from uuid import UUID
 
 
-class Worker(object):
-    """ Abstract class representing workers. """
+class Worker(EventListener):
 
     _abandoned_batches = []
 
-    def __init__(self, simulation, id: str, total_memory: int, group_id: int=-1, created_at: float=0):
-        assert(total_memory in [24, 12, 6])
+    def __init__(self, id: UUID, em: EventManager, total_memory_gb: int, create_time: float):
+        super().__init__(Agent.WORKER)
 
-        self.create_time = created_at
-
-        self.group_id = group_id
         self.id = id
-        self.simulation = simulation
-        self.total_memory = total_memory
+        self.em = em
+        self.total_memory_gb = total_memory_gb
+        self.create_time = create_time
+        self.GPU_state = GPUState(total_memory_gb * (10**6))
+
+        self.em.register_listener(self, {
+            EVENT_TYPES[EventIds.TASKS_SCHEDULED_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_WORKER],
+            EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
+            EVENT_TYPES[EventIds.JOBS_DROPPED],
+        })
+
+        self.emitter_id = self.em.register_emitter(Agent.WORKER, {
+            EVENT_TYPES[EventIds.TASKS_SENT_TO_SCHEDULER],
+            EVENT_TYPES[EventIds.TASKS_SENT_TO_WORKER],
+            EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
+            EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
+            EVENT_TYPES[EventIds.JOBS_DROPPED],
+            EVENT_TYPES[EventIds.RESPONSE_SENT_TO_CLIENT]
+        })
+
+        self.queues: dict[int, PriorityQueue] = {}
+        self.completed_tasks: dict[tuple[int, int], Task] = {}
+        self.scheduled_task_to_worker: dict[tuple[int, int], UUID] = {} # (job ID, task ID) -> worker ID
+
+    def on_event(self, event: Event):
+        if event.type.id == EventIds.TASKS_SCHEDULED_TO_WORKER:
+            if event.kwargs["worker_id"] != self.id:
+                return
+
+            self.on_tasks_scheduled(event.time, event.kwargs["job_task_ids"], 
+                                    event.kwargs["worker_id"])
         
-        self.GPU_state = GPUState(total_memory * (10**6))
+        elif event.type.id == EventIds.TASKS_ARRIVAL_AT_WORKER:
+            if event.kwargs["worker_id"] != self.id:
+                return
+
+            self.on_tasks_arrival(event.time, event.kwargs["tasks"], event.kwargs["force_instance_id"])
+
+        elif event.type.id == EventIds.JOBS_DROPPED:
+            self._drop_tasks(event.kwargs["job_ids"])
+
+        elif event.type.id == EventIds.BATCH_FINISHED_AT_WORKER:
+            if event.kwargs["worker_id"] != self.id:
+                return
+            
+            self.on_batch_finish(event.time, event.kwargs["batch"], event.kwargs["model_instance_id"])
+
+        else:
+            raise ValueError(f"Worker received unregistered event: {event}")
+        
+    def _drop_tasks(self, job_ids: list[int]):
+        """Remove all tasks associated with given jobs from queues. Does not
+        affect executing batches.
+
+        Args:
+            job_ids: All IDs of jobs to drop
+        """
+        for q in self.queues.values():
+            filtered = []
+            while q.qsize() > 0:
+                task: Task = q.get()
+                if task.job.id not in job_ids: 
+                    filtered.append(task)
+            
+            for t in filtered: q.put(t)
+        
+    def on_tasks_scheduled(self, time: float, job_task_ids: list[tuple[int, int]], 
+                           worker_id: UUID):
+        
+        tasks_to_send = []
+        for (jid, tid) in job_task_ids:
+            self.scheduled_task_to_worker[(jid, tid)] = worker_id
+            if (jid, tid) in self.completed_tasks:
+                tasks_to_send.append((jid, tid))
+        
+        if tasks_to_send:
+            self.em.add_event(
+                Event(time, 
+                      EVENT_TYPES[EventIds.TASKS_SENT_TO_WORKER],
+                      kwargs={"tasks": tasks_to_send, 
+                              "from_worker_id": self.id, 
+                              "to_worker_id": worker_id}),
+                self.emitter_id)
+    
+    def on_tasks_arrival(self, time: float, tasks: list[Task], force_exec_on_instance_id: UUID | None):
+        """On arrival of tasks to execute, attempts to start batch execution if idle models
+        exist.
+
+        Args:
+            time: Current time
+            tasks: Tasks that arrived at worker at given time
+            force_exec_on_instance_id: If specified, disables worker queueing and attempts to
+            execute arrived tasks as a single batch on the required model instance.
+        """
+        
+        if force_exec_on_instance_id:
+            state = self.GPU_state.get_instance_state(force_exec_on_instance_id, time)
+            assert(state.reserved_batch == None)
+
+            self.exec_batch(time, Batch(tasks), force_exec_on_instance_id)
+        
+        else:
+            for task in tasks:
+                if task.model_data.id not in self.queues:
+                    self.queues[task.model_data.id] = PriorityQueue()
+                self.queues[task.model_data.id].put(QueuedTask(task))
+
+            models_needed = [mid for mid in self.queues.keys() if self.queues[mid].qsize() > 0]
+
+            states = self.GPU_state.state_at(time)
+            for state in states:
+                # if idle copy of required model exists start batch
+                if state.model.data.id in models_needed and not state.reserved_batch:
+                    batch = TaskBatcher.get_batch(time, 
+                                                self.total_memory_gb, 
+                                                self.queues[state.model.data.id],
+                                                False)
+                    TaskBatcher.dequeue_batch(batch, self.queues[state.model.data.id])
+
+                    self.exec_batch(time, batch, instance_id=state.model.id)
+                    
+                    if self.queues[state.model.data.id].qsize() == 0:
+                        models_needed.remove(state.model.data.id)
+
+
+    def on_batch_finish(self, time: float, batch: Batch, instance_id):
+        assert(not self.did_abandon_batch(batch.id))
+
+        # release model
+        if batch.model_data != None:
+            self.GPU_state.release_busy_model(batch.id, time)
+
+        # if any jobs are complete, send response to client
+        for task in batch.tasks:
+            task.job.set_completion_time(time, task.task_id)
+            if task.job.is_complete():
+                self.em.add_event(
+                    Event(time,
+                          EVENT_TYPES[EventIds.RESPONSE_SENT_TO_CLIENT],
+                          kwargs={"job": task.job,
+                                  "ignore_transfer_time": gcfg.DISPATCH_POLICY == "SHEPHERD_PERFECT",
+                                  "client_id": task.job.client_id,
+                                  "worker_id": self.id}),
+                    self.emitter_id)
+
+        # for perfect scheduler, send new available tasks at no cost to scheduler
+        if gcfg.DISPATCH_POLICY == "SHEPHERD_PERFECT":
+            all_available = [nt for task in batch.tasks for nt in task.job.newly_available_tasks(task)]
+            if all_available:
+                self.em.add_event(
+                    Event(time,
+                        EVENT_TYPES[EventIds.TASKS_SENT_TO_SCHEDULER],
+                        kwargs={"tasks": all_available, 
+                                "from_worker_id": self.id,
+                                "ignore_transfer_time": True}),
+                    self.emitter_id)
+            
+        else:
+            # if any tasks have been scheduled, send to next worker
+            tasks_to_send: dict[UUID, list[Task]] = {}
+            for task in batch.tasks:
+                
+                self.completed_tasks[(task.job.id, task.task_id)] = task
+                if (task.job.id, task.task_id) in self.scheduled_task_to_worker:
+                    worker_id = self.scheduled_task_to_worker[(task.job.id, task.task_id)]
+                    if worker_id not in tasks_to_send: tasks_to_send[worker_id] = []
+                    tasks_to_send[worker_id].append(task)
+                
+            for (worker_id, tasks) in tasks_to_send.items():
+                self.em.add_event(
+                    Event(time, 
+                        EVENT_TYPES[EventIds.TASKS_SENT_TO_WORKER],
+                        kwargs={"tasks": tasks, 
+                                "from_worker_id": self.id, 
+                                "to_worker_id": worker_id}),
+                    self.emitter_id)
+            
+            # if queue is not empty, start a new batch
+            instance_state = self.GPU_state.get_instance_state(instance_id, time)
+            if self.queues[instance_state.model.data.id].qsize() > 0:
+                batch = TaskBatcher.get_batch(time, 
+                                            self.total_memory_gb,
+                                            self.queues[instance_state.model.data.id],
+                                            False)
+                TaskBatcher.dequeue_batch(batch, self.queues[instance_state.model.data.id])
+                
+                self.exec_batch(time, batch, instance_id)
+
+    def exec_batch(self, time: float, batch: Batch, instance_id=None):
+        """Reserves an idle copy of any required GPU models and executes the given batch.
+
+        Args:
+            time: Time to start batch execution
+            batch: Batch to execute
+            instance_id: Optional ID of model instance to execute
+        """
+
+        batch_exec_time = batch.model_data.get_randomized_exec_time(
+            batch.size(), self.total_memory_gb)
+        reserved_instance_id = None
+
+        if batch.model_data != None:
+            assert(self.GPU_state.does_have_idle_copy(batch.model_data.id, time))
+
+            if instance_id:
+                reserved_instance_id = instance_id
+                self.GPU_state.reserve_instance(instance_id, time, batch, batch_exec_time)
+            else:
+                reserved_instance_id = self.GPU_state.reserve_idle_copy(
+                    batch.model_data, time, batch, batch_exec_time)
+
+            # verify reserved instance
+            reserved_state = [s for s in self.GPU_state.state_at(time)
+                                if s.model.id == reserved_instance_id][0]
+            assert(reserved_state.reserved_until >= (time + batch_exec_time))
+            assert(reserved_state.reserved_batch == batch)
+            assert(reserved_state.model.data.id == batch.model_data.id)
+            assert(reserved_state.state == ModelState.PLACED)
+
+            batch_exec_time = reserved_state.reserved_until - time
+        
+        for task in batch.tasks:
+            task.log.task_front_queue_timestamp = time
+            task.log.task_execution_start_timestamp = time
+
+        task_end_time = time + batch_exec_time + \
+            SameMachineCPUtoGPU_delay(sum(t.input_size for t in batch.tasks)) + \
+            SameMachineGPUtoCPU_delay(sum(t.result_size for t in batch.tasks))
+        
+        self.em.add_event(
+            Event(time, 
+                  EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
+                  kwargs={"batch": batch, 
+                          "model_instance_id": reserved_instance_id, 
+                          "worker_id": self.id}),
+            self.emitter_id)
+        
+        self.em.add_event(
+            Event(task_end_time, 
+                  EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
+                  kwargs={"batch": batch, 
+                          "model_instance_id": reserved_instance_id, 
+                          "worker_id": self.id}),
+            self.emitter_id)
+        
+    def did_abandon_batch(self, batch_id: int):
+        return batch_id in Worker._abandoned_batches
 
     def __hash__(self):
         return hash(self.id)
 
     def __str__(self):
-        return "[Worker_id:{}]".format(self.id)
+        return f"[WORKER {self.id}] [STATE: {self.GPU_state}]"
+    
+    def __repr__(self):
+        return self.__str__()
 
     def __eq__(self, other):
-        if isinstance(other, Worker):
-            return self.id == other.id
-        return False
-
-    def __ne__(self, other):
-        return not (self == other)
-    
-    def __lt__(self, other):
-        return self.create_time < other.create_time
-    
-    """ ----------  BATCH TRACKING AND MANAGEMENT  ---------- """
-    
-    def evict_batch(self, batch_id: int, time: float):
-        evicted_batch = None
-        for s in self.GPU_state.state_at(time):
-            if s.reserved_batch and s.reserved_batch.id == batch_id:
-                evicted_batch = s.reserved_batch
-                break
-        self.GPU_state.release_busy_model(batch_id, time)
-        Worker._abandoned_batches.append(batch_id)
-        return evicted_batch
-
-    def did_abandon_batch(self, batch_id: int):
-        return batch_id in Worker._abandoned_batches
-    
-    """ ----------  LOCAL MEMORY MANAGEMENT  ---------- """
-
-    def evict_model(self, time: float, model_id: int) -> Batch | None:
-        """Evict one copy of a model. Prioritizes idle copies.
-
-        Args:
-            time: Time to start eviction
-            model_id: ID of model to evict (not instance ID)
-
-        Returns:
-            evicted_batch: If evicted model was running a batch,
-            returns the evicted batch.
-        """
-
-        instance_id, evicted_batch = self.GPU_state.evict_any(model_id, time, 0)
-        if evicted_batch:
-            Worker._abandoned_batches.append(evicted_batch.id)
-        
-        self.simulation.worker_model_log.loc[len(self.simulation.worker_model_log)] = {
-            "start_time": time,
-            "end_time": time ,
-            "worker_id": self.id,
-            "model_id": model_id,
-            "instance_id": instance_id,
-            "placed_or_evicted": "evicted"
-        }
-        return evicted_batch
-    
-    def fetch_model(self, model_data: ModelData | None, batch, current_time: float, exec_time=-1):
-        if model_data == None:
-            return []
-        
-        fetch_time = 0
-        fetch_time = SameMachineCPUtoGPU_delay(model_data.size)
-
-        reserve_until = -1 if exec_time < 0 else (current_time + fetch_time + exec_time)
-
-        instance_id = self.GPU_state.fetch_model(
-            model_data, current_time, fetch_time, 
-            reserved_batch=batch, reserve_until=reserve_until)
-        
-        self.simulation.worker_model_log.loc[len(self.simulation.worker_model_log)] = {
-            "start_time": current_time,
-            "end_time": current_time + fetch_time,
-            "worker_id": self.id,
-            "model_id": model_data.id,
-            "instance_id": instance_id,
-            "placed_or_evicted": "placed"
-        }
-
-        return [EventOrders(current_time + fetch_time, 
-                            WorkerFinishedModelFetchEvent(self.simulation, self, model_data.id))]
-    
-    _CAN_RUN_NOW = 0
-    _CAN_RUN_ON_EVICT = 1
-    _CANNOT_RUN = 2
-
-    def can_run_task(self, current_time: float, model_data: ModelData | None) -> int:
-        """
-            Returns _CAN_RUN_NOW if model None, or model is on GPU and not currently in use.
-            Returns _CAN_RUN_ON_EVICT if model can be loaded onto the GPU upon evicting
-            unused models.
-            Returns _CANNOT_RUN otherwise.
-        """
-        if model_data == None or self.GPU_state.does_have_idle_copy(model_data.id, current_time):
-            return self._CAN_RUN_NOW
-        
-        if self.GPU_state.can_fetch_model(model_data, current_time):
-            return self._CAN_RUN_NOW
-        
-        if self.GPU_state.can_fetch_model_on_eviction(model_data, current_time):
-            return self._CAN_RUN_ON_EVICT
-        
-        return self._CANNOT_RUN
-
-    # ------------------------- cached model history update helper functions ---------------
-    def get_history(self, history, current_time, info_staleness) -> list:
-        delayed_time = current_time - info_staleness
-        last_index = len(history) - 1
-        while last_index >= 0:
-            if history[last_index][0] <= delayed_time:
-                return history[last_index][1].copy()
-            last_index -= 1  # check the previous one
-        return []
+        return isinstance(other, Worker) and self.id == other.id
