@@ -11,13 +11,13 @@ class Agent:
 
 
 class EventType:
-    def __init__(self, id: int, name: str, kwargs: dict[str, tuple[bool, type]],
+    def __init__(self, id: int, name: str, kwargs: dict[str, bool],
                  emitter_types: set[int], listener_types: set[int]):
         """
         Args:
             id: Unique integer ID
             name: Human readable name for event
-            kwargs: Map of event argument name -> (arg is required, arg type)
+            kwargs: Map of event argument name -> arg is required
             emitter_types: Agents who are allowed to emit this event type
             listener_types: Agents who are allowed to listen for this event type
         """
@@ -34,23 +34,18 @@ class EventType:
             kwargs: Event argument name -> value
         
         Returns:
-            is_valid: kwargs object contains all required fields,
-            no unknown keys, and all values are typed correctly.
+            is_valid: kwargs object contains all required fields and
+            no unknown keys.
         """
 
-        required_args = [(k, (is_required, atype)) 
-                         for k, (is_required, atype) in self.kwargs.items() if is_required]
-        for (arg, (_, atype)) in required_args:
-            if arg not in kwargs:
-                print(f"{arg} not in kwargs")
+        for k in self.kwargs.keys():
+            if self.kwargs[k] and k not in kwargs:
+                print(f"Missing required key {k} in kwargs")
                 return False
             
-            # if type(kwargs[arg]) != atype:
-            #     print(f"{arg} type is {type(kwargs[arg])} != {atype}")
-            #     return False
-        
-        for k, v in kwargs.items():
-            if k not in self.kwargs: #or type(v) != self.kwargs[k][1]:
+        for k in kwargs.keys():
+            if k not in self.kwargs:
+                print(f"Unknown key {k} in kwargs")
                 return False
 
         return True
@@ -89,7 +84,7 @@ class Event:
         return self.__str__()
     
     def __lt__(self, other):
-        return self.time < other.time
+        return (self.time, self.type.id) < (other.time, other.type.id)
     
 
 class EventListener:

@@ -44,6 +44,8 @@ class Client(EventListener):
                 True,
                 self.jobs[event.kwargs["job"].id][3]
             )
+
+            print(f"Remaining jobs for client {self.id}: {len(self.jobs.keys()) - len([v for v in self.jobs.values() if v[2]])}")
         
         elif event.type.id == EventIds.JOBS_DROPPED:
             for job_id in event.kwargs["job_ids"]:
@@ -96,7 +98,7 @@ class Client(EventListener):
             self.em.add_event(
                 Event(job_create_time,
                       EVENT_TYPES[EventIds.JOB_SENT_TO_SCHEDULER],
-                      kwargs={"job": job, "from_client_id": self.id, "ignore_transfer_time": False}),
+                      kwargs={"job": job, "from_client_id": self.id, "ignore_transfer_time": not gcfg.ENABLE_NETWORKING_DELAYS}),
                 self.emitter_id)
 
         return last_create

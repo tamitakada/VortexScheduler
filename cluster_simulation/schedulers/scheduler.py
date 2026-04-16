@@ -22,8 +22,9 @@ class Scheduler(EventListener):
         })
 
         self.emitter_id = self.em.register_emitter(Agent.SCHEDULER, {
-            EVENT_TYPES[EventIds.TASKS_SCHEDULED_TO_WORKER],
-            EVENT_TYPES[EventIds.TASKS_SENT_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_ASSIGNED_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_INPUTS_SENT_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_OUTPUTS_ASSIGNED_TO_WORKER],
             EVENT_TYPES[EventIds.JOBS_DROPPED]
         })
 
@@ -35,7 +36,8 @@ class Scheduler(EventListener):
         elif event.type.id == EventIds.JOBS_DROPPED:
             self.on_jobs_dropped(event.time, event.kwargs["job_ids"])
         elif event.type.id == EventIds.BATCH_STARTED_AT_WORKER:
-            self.on_batch_start(event.time, event.kwargs["batch"], event.kwargs["worker_id"])
+            self.on_batch_start(event.time, event.kwargs["batch"], event.kwargs["worker_id"],
+                                event.kwargs["model_instance_id"])
         elif event.type.id == EventIds.BATCH_FINISHED_AT_WORKER:
             self.on_batch_finish(event.time, event.kwargs["batch"], event.kwargs["worker_id"], 
                                  event.kwargs["model_instance_id"])
@@ -51,7 +53,7 @@ class Scheduler(EventListener):
     def on_jobs_dropped(self, time: float, job_ids: int):
         raise NotImplementedError()
     
-    def on_batch_start(self, time: float, batch: Batch, worker_id: UUID):
+    def on_batch_start(self, time: float, batch: Batch, worker_id: UUID, instance_id: UUID):
         raise NotImplementedError()
     
     def on_batch_finish(self, time: float, batch: Batch, worker_id: UUID, instance_id: UUID):

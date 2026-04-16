@@ -15,15 +15,15 @@ class Network(EventListener):
 
         self.em.register_listener(self, {
             EVENT_TYPES[EventIds.JOB_SENT_TO_SCHEDULER],
-            EVENT_TYPES[EventIds.TASKS_SENT_TO_SCHEDULER],
-            EVENT_TYPES[EventIds.TASKS_SENT_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_INPUTS_SENT_TO_WORKER],
+            EVENT_TYPES[EventIds.TASKS_OUTPUTS_SENT_TO_WORKER],
             EVENT_TYPES[EventIds.RESPONSE_SENT_TO_CLIENT]
         })
 
         self.emitter_id = self.em.register_emitter(Agent.NETWORK, {
             EVENT_TYPES[EventIds.JOB_ARRIVAL_AT_SCHEDULER],
-            EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_SCHEDULER],
-            EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_WORKER],
+            EVENT_TYPES[EventIds.TASKS_INPUTS_ARRIVAL_AT_WORKER],
+            EVENT_TYPES[EventIds.TASKS_OUTPUTS_ARRIVAL_AT_WORKER],
             EVENT_TYPES[EventIds.RESPONSE_RECEIVED_AT_CLIENT]
         })
 
@@ -41,21 +41,7 @@ class Network(EventListener):
                       kwargs={"job": event.kwargs["job"]}), 
                 self.emitter_id)
 
-        elif event.type.id == EventIds.TASKS_SENT_TO_SCHEDULER:
-            transfer_time = 0
-            if not event.kwargs["ignore_transfer_time"] and \
-                event.kwargs["from_worker_id"] != self.scheduler_worker_id:
-                
-                msg_size = sum(t.input_size for t in event.kwargs["tasks"])
-                transfer_time = msg_size / 12500
-            
-            self.em.add_event(
-                Event(event.time + transfer_time,
-                      EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_SCHEDULER],
-                      kwargs={"tasks": event.kwargs["tasks"]}), 
-                self.emitter_id)
-            
-        elif event.type.id == EventIds.TASKS_SENT_TO_WORKER:
+        elif event.type.id == EventIds.TASKS_INPUTS_SENT_TO_WORKER:
             transfer_time = 0
             if not event.kwargs["ignore_transfer_time"] and \
                 event.kwargs["from_worker_id"] != event.kwargs["to_worker_id"]:
@@ -63,12 +49,32 @@ class Network(EventListener):
                 msg_size = sum(t.input_size for t in event.kwargs["tasks"])
                 transfer_time = msg_size / 12500
             
+            kwargs = {"tasks": event.kwargs["tasks"],
+                      "from_worker_id": event.kwargs["from_worker_id"],
+                      "to_worker_id": event.kwargs["to_worker_id"]}
+            if "force_instance_id" in event.kwargs:
+                kwargs["force_instance_id"] = event.kwargs["force_instance_id"]
+
             self.em.add_event(
                 Event(event.time + transfer_time,
-                      EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_WORKER],
+                      EVENT_TYPES[EventIds.TASKS_INPUTS_ARRIVAL_AT_WORKER],
+                      kwargs=kwargs), 
+                self.emitter_id)
+            
+        elif event.type.id == EventIds.TASKS_OUTPUTS_SENT_TO_WORKER:
+            transfer_time = 0
+            if not event.kwargs["ignore_transfer_time"] and \
+                event.kwargs["from_worker_id"] != event.kwargs["to_worker_id"]:
+                
+                msg_size = sum(t.result_size for t in event.kwargs["tasks"])
+                transfer_time = msg_size / 12500
+            
+            self.em.add_event(
+                Event(event.time + transfer_time,
+                      EVENT_TYPES[EventIds.TASKS_OUTPUTS_ARRIVAL_AT_WORKER],
                       kwargs={"tasks": event.kwargs["tasks"],
-                              "force_instance_id": event.kwargs["force_instance_id"],
-                              "worker_id": event.kwargs["to_worker_id"]}), 
+                              "from_worker_id": event.kwargs["from_worker_id"],
+                              "to_worker_id": event.kwargs["to_worker_id"]}), 
                 self.emitter_id)
         
         elif event.type.id == EventIds.RESPONSE_SENT_TO_CLIENT:

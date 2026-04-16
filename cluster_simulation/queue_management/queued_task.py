@@ -1,10 +1,18 @@
+import core.configs.gen_config as gcfg
+
 from core.task import Task
 
 
 class QueuedTask:
     def __init__(self, task: Task):
         self.task = task
-        self.priority = task.job.create_time # TODO
+
+        if gcfg.BOOST_POLICY == "FCFS":
+            self.priority = task.job.create_time
+        elif gcfg.BOOST_POLICY == "EDF":
+            self.priority = task.get_task_deadline()
+        else:
+            raise ValueError(f"Unrecognized queue ordering policy {gcfg.BOOST_POLICY}")
 
     def __lt__(self, other):
         return self.priority < other.priority

@@ -1,4 +1,3 @@
-from core.logging import *
 from core.data_models.model_data import ModelData
 
 import core.configs.gen_config as gcfg
@@ -25,8 +24,6 @@ class Task(object):
         self.assigned_worker_id = None
         self.executing_worker_id = -1
         self.ADFG = {}                                  # ADFG assigned to the job that this task belongs to
-        self.log = TaskLifeCycleTimestamp(
-            self.job.id, self.task_id, is_initial_task=(len(self.required_task_ids) == 0))
 
     def get_task_deadline(self):
         if gcfg.SLO_TYPE == "NEXUS":
@@ -47,7 +44,7 @@ class Task(object):
         return not (self.__eq__(other))
 
     def __str__(self):
-        return "[JobID: {}, TaskID: {} placed on worker queue @ {}]".format(self.job.id, self.task_id, self.log.task_placed_on_worker_queue_timestamp)
+        return f"[Job ID {self.job.id}, Task ID {self.task_id}]"
 
     def __repr__(self):
         return self.__str__()

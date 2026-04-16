@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 
 import core.configs.gen_config as gcfg
@@ -9,13 +10,16 @@ from core.data_models.model_data import ModelData
 
 from client.client import Client
 from network.network import Network
-from schedulers.centralized_scheduler import CentralizedScheduler
+from schedulers.shepherd_scheduler import ShepherdScheduler
+from schedulers.central_round_robin_scheduler import CentralRoundRobinScheduler
 from workers.worker import Worker
 
 from core.allocation import ModelAllocation
 from schedulers.algo.vortex_planner_algo import VortexPlanner
 
 from verifiers.verifier import Verifier
+
+from sim_logging.logger import Logger
 
 from events.event_manager import EventManager
 from events.event import *
@@ -26,7 +30,8 @@ from uuid import uuid4
 
 class Simulation:
 
-    def __init__(self, centralized: bool):
+    def __init__(self, centralized: bool, out_path: str):
+        self.out_path = out_path
         self.em = EventManager()
 
         self.models = self._generate_models()
@@ -39,10 +44,18 @@ class Simulation:
         self.scheduler = None
         if centralized:
             scheduler_worker_id = list(self.workers.keys())[0]
-            self.scheduler = CentralizedScheduler(self.em, self.workers, scheduler_worker_id)
+
+            if gcfg.DISPATCH_POLICY == "SHEPHERD":
+                self.scheduler = ShepherdScheduler(
+                    self.em, self.workers, self.workflows, scheduler_worker_id)
+            
+            elif gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
+                self.scheduler = CentralRoundRobinScheduler(
+                    self.em, self.workers, self.workflows, scheduler_worker_id)
 
         self.network = Network(self.em, scheduler_worker_id)
         self.verifier = Verifier(self.em, self.workers)
+        self.logger = Logger(self.em)
 
 
     def _generate_clients(self) -> list[Client]:
@@ -149,27 +162,10 @@ class Simulation:
         for (wid, _) in self.allocation.worker_ids_by_create_time:
             cfg = self.allocation.worker_cfgs[wid]
             worker = Worker(wid, self.em, cfg[0], 0)
-            
             workers[wid] = worker
-
-            # self.worker_log.loc[len(self.worker_log)] = {
-            #     "time": 0,
-            #     "add_or_remove": "add",
-            #     "worker_id": wid
-            # }
-
             for mid in cfg[1]:
                 self.models[mid].max_batch_size = self.allocation.models[mid].max_batch_size
                 instance_id = workers[wid].GPU_state.prefetch_model(self.models[mid])
-
-                # self.worker_model_log.loc[len(self.worker_model_log)] = {
-                #     "start_time": 0,
-                #     "end_time": 0, # prefetch special case assume no overhead
-                #     "worker_id": wid,
-                #     "model_id": mid,
-                #     "instance_id": instance_id,
-                #     "placed_or_evicted": "placed"
-                # }
         return workers
 
 
@@ -183,8 +179,46 @@ class Simulation:
             RESET = "\033[0m"
             print(f"{RED_BOLD}[VERIFIER WARNING] {sampled_anomalies * 100:.2f}% of batch execution time samples ({self.verifier.sampled_anomalies}/{self.verifier.total_samples}) showed significant deviation (p < 0.05) given configured mean and CV{RESET}")
 
-        self._get_client_data()
+        self.logger.task_log.to_csv(os.path.join(self.out_path, "task_log.csv"))
+        self.logger.worker_log.to_csv(os.path.join(self.out_path, "worker_batch_log.csv"))
 
+        self._get_client_data()
+        self._postprocess_idle_times()
+        self._postprocess_nonexec_delays()
+
+    def _postprocess_nonexec_delays(self):
+        delays_df = pd.DataFrame(columns=["workflow_id", "task_id", "mean_queueing_time", "std_queueing_time",
+                                          "mean_dispatch_time", "std_dispatch_time"])
+        for w in sorted(set(self.logger.task_log["workflow_id"])):
+            df = self.logger.task_log[self.logger.task_log["workflow_id"]==w]
+            for t in sorted(set(df["task_id"])):
+                tdf = df[df["task_id"]==t]
+                queueing_times = tdf["execution_start_timestamp"] - tdf["arrival_at_worker_timestamp"]
+                dispatch_times = tdf["arrival_at_worker_timestamp"] - tdf["last_dep_dispatch_timestamp"]
+
+                delays_df.loc[len(delays_df)] = [w, t, queueing_times.mean(), queueing_times.std(),
+                                                 dispatch_times.mean(), dispatch_times.std()]
+        
+        delays_df.to_csv(os.path.join(self.out_path, "nonexec_delays.csv"))
+
+    def _postprocess_idle_times(self):
+        idle_df = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "idle_time_s", "idle_percent_worker_lifetime"])
+        last_task_exec_end = self.logger.worker_log["execution_end_timestamp"].max()
+        for instance_id in set(self.logger.worker_log["instance_id"]):
+            df = self.logger.worker_log[self.logger.worker_log["instance_id"]==instance_id]
+            idle_time = 0
+            last_exec_end = -1
+            for i, row in df.iterrows():
+                if last_exec_end < 0:
+                    idle_time += row["execution_start_timestamp"]
+                else:
+                    idle_time += row["execution_start_timestamp"] - last_exec_end
+                
+                last_exec_end = row["execution_end_timestamp"]
+            idle_df.loc[len(idle_df)] = [df["worker_id"].iloc[0], instance_id, df["model_id"].iloc[0], 
+                                         idle_time, idle_time / last_task_exec_end * 100]
+
+        idle_df.to_csv(os.path.join(self.out_path, "model_instance_idle_times.csv"))
 
     def _get_client_data(self):
         jobs_df = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "was_completed",
@@ -200,4 +234,4 @@ class Simulation:
                     "create_time": create_time,
                     "response_time": finish_time - create_time
                 }
-        jobs_df.to_csv("jobs.csv")
+        jobs_df.to_csv(os.path.join(self.out_path, "job_log.csv"))
