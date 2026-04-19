@@ -17,7 +17,8 @@ from workers.worker import Worker
 from core.allocation import ModelAllocation
 from schedulers.algo.vortex_planner_algo import VortexPlanner
 
-from verifiers.verifier import Verifier
+from verifiers.live_verifier import LiveVerifier
+from verifiers.log_verifier import LogVerifier
 
 from sim_logging.logger import Logger
 
@@ -54,7 +55,10 @@ class Simulation:
                     self.em, self.workers, self.workflows, scheduler_worker_id)
 
         self.network = Network(self.em, scheduler_worker_id)
-        self.verifier = Verifier(self.em, self.workers)
+        self.verifier = LiveVerifier(self.em, 
+                                     {c.id: c for c in self.clients}, 
+                                     self.workers,
+                                     scheduler_worker_id)
         self.logger = Logger(self.em)
 
 
@@ -186,6 +190,29 @@ class Simulation:
         self._postprocess_idle_times()
         self._postprocess_nonexec_delays()
 
+        if gcfg.PRODUCE_EVENT_LOG:
+            self.em.event_log.to_csv(os.path.join(self.out_path, "event_log.csv"))
+        
+        self._produce_agent_keys()
+
+        self.verifier.verify_on_sim_end()
+
+        log_verifier = LogVerifier(None, self.logger.task_log, self.logger.worker_log)
+        log_verifier.run()
+
+
+    def _produce_agent_keys(self):
+        worker_log = pd.DataFrame(columns=["worker_id", "worker_creation_timestamp", "instance_id", "model_id",
+                                           "instance_loaded_timestamp"])
+        for worker in self.workers.values():
+            for s in worker.GPU_state.state_at(0):
+                worker_log.loc[len(worker_log)] = [worker.id, worker.create_time, s.model.id, s.model.data.id,
+                                                   s.model.active_from]
+
+        worker_log.to_csv(os.path.join(self.out_path, "worker_config_log.csv"))
+        # TODO: client log
+
+
     def _postprocess_nonexec_delays(self):
         delays_df = pd.DataFrame(columns=["workflow_id", "task_id", "mean_queueing_time", "std_queueing_time",
                                           "mean_dispatch_time", "std_dispatch_time"])
@@ -202,7 +229,8 @@ class Simulation:
         delays_df.to_csv(os.path.join(self.out_path, "nonexec_delays.csv"))
 
     def _postprocess_idle_times(self):
-        idle_df = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "idle_time_s", "idle_percent_worker_lifetime"])
+        idle_df = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "idle_time_s", "idle_percent_worker_lifetime", 
+                                        "mean_batch_size", "std_batch_size"])
         last_task_exec_end = self.logger.worker_log["execution_end_timestamp"].max()
         for instance_id in set(self.logger.worker_log["instance_id"]):
             df = self.logger.worker_log[self.logger.worker_log["instance_id"]==instance_id]
@@ -215,8 +243,11 @@ class Simulation:
                     idle_time += row["execution_start_timestamp"] - last_exec_end
                 
                 last_exec_end = row["execution_end_timestamp"]
-            idle_df.loc[len(idle_df)] = [df["worker_id"].iloc[0], instance_id, df["model_id"].iloc[0], 
-                                         idle_time, idle_time / last_task_exec_end * 100]
+            
+            model_id = df["model_id"].iloc[0]
+            idle_df.loc[len(idle_df)] = [df["worker_id"].iloc[0], instance_id, model_id, 
+                                         idle_time, idle_time / last_task_exec_end * 100,
+                                         df["batch_size"].mean(), df["batch_size"].std()]
 
         idle_df.to_csv(os.path.join(self.out_path, "model_instance_idle_times.csv"))
 
@@ -224,13 +255,13 @@ class Simulation:
         jobs_df = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "was_completed",
                                         "deadline", "create_time", "response_time"])
         for client in self.clients:
-            for jid, (create_time, finish_time, was_completed, job) in client.jobs.items():
+            for jid, (create_time, finish_time, was_completed, deadline, job) in client.jobs.items():
                 jobs_df.loc[len(jobs_df)] = {
                     "client_id": client.id,
                     "workflow_id": job.job_type_id,
                     "job_id": jid,
                     "was_completed": was_completed,
-                    "deadline": -1, #TODO FIX FIX
+                    "deadline": deadline,
                     "create_time": create_time,
                     "response_time": finish_time - create_time
                 }

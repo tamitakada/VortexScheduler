@@ -1,3 +1,6 @@
+import pandas as pd
+import core.configs.gen_config as gcfg
+
 from queue import PriorityQueue
 
 from events.event_types import *
@@ -16,6 +19,9 @@ class EventManager:
         # event ID -> emitter/listener IDs authorized to emit/listen for event 
         self._event_emitters: dict[int, list[UUID]] = {}
         self._event_listeners: dict[int, list[UUID]] = {}
+
+        if gcfg.PRODUCE_EVENT_LOG:
+            self.event_log = pd.DataFrame(columns=["time", "event"])
 
 
     def register_emitter(self, emitter_type: int, event_types: set[EventType]) -> UUID:
@@ -81,8 +87,11 @@ class EventManager:
         event: Event = self._event_queue.get()
         assert(event.time >= self._prev_time)
 
-        print("Received event: ", event)
-        print()
+        if gcfg.PRODUCE_EVENT_LOG:
+            self.event_log.loc[len(self.event_log)] = [event.time, str(event)]
+
+        # print("Received event: ", event)
+        # print()
 
         # notify all listeners
         for listener_id in self._event_listeners[event.type.id]:

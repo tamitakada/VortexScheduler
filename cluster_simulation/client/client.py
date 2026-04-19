@@ -27,8 +27,8 @@ class Client(EventListener):
             EVENT_TYPES[EventIds.JOB_SENT_TO_SCHEDULER]
         })
 
-        # job ID: (create time, received response time, did finish job, job)
-        self.jobs: dict[int, (float, float, bool, Job)] = {}
+        # job ID: (create time, received response time, did finish job, deadline, job)
+        self.jobs: dict[int, (float, float, bool, float, Job)] = {}
 
     def on_event(self, event: Event):
         if event.type.id == EventIds.RESPONSE_RECEIVED_AT_CLIENT:
@@ -42,7 +42,8 @@ class Client(EventListener):
                 self.jobs[event.kwargs["job"].id][0],
                 event.time,
                 True,
-                self.jobs[event.kwargs["job"].id][3]
+                self.jobs[event.kwargs["job"].id][3],
+                self.jobs[event.kwargs["job"].id][4]
             )
 
             print(f"Remaining jobs for client {self.id}: {len(self.jobs.keys()) - len([v for v in self.jobs.values() if v[2]])}")
@@ -93,7 +94,8 @@ class Client(EventListener):
             
             last_create = job_create_time
             prev_time = job_create_time
-            self.jobs[job_id_range_start + n] = (job_create_time, -1, False, job)
+            self.jobs[job_id_range_start + n] = (
+                job_create_time, -1, False, job_create_time + slo, job)
 
             self.em.add_event(
                 Event(job_create_time,

@@ -33,7 +33,7 @@ class Logger(EventListener):
             EVENT_TYPES[EventIds.RESPONSE_RECEIVED_AT_CLIENT]
         })
 
-        self.task_log = pd.DataFrame(columns=["job_id", "task_id", "client_id", "workflow_id", "executing_worker_id",
+        self.task_log = pd.DataFrame(columns=["job_id", "task_id", "client_id", "workflow_id", "model_id", "executing_worker_id",
                                          "arrival_at_scheduler_timestamp", "last_dep_dispatch_timestamp", "arrival_at_worker_timestamp",
                                          "execution_start_timestamp", "execution_end_timestamp", "dropped_timestamp"])
         self.worker_log = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "batch_id", "batched_job_task_ids", 
@@ -49,7 +49,7 @@ class Logger(EventListener):
                 if len(task.required_task_ids) == 0:
                     self.task_log.loc[len(self.task_log)] = {
                         "job_id": job.id, "task_id": task.task_id, "client_id": job.client_id, 
-                        "workflow_id": job.job_type_id, "executing_worker_id": "N/A",
+                        "model_id": task.model_data.id, "workflow_id": job.job_type_id, "executing_worker_id": "N/A",
                         "arrival_at_scheduler_timestamp": event.time, "arrival_at_worker_timestamp": np.nan,
                         "last_dep_dispatch_timestamp": np.nan, "execution_start_timestamp": np.nan, 
                         "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan
@@ -60,7 +60,7 @@ class Logger(EventListener):
             for task in tasks:
                 self.task_log.loc[len(self.task_log)] = {
                     "job_id": task.job.id, "task_id": task.task_id, "client_id": task.job.client_id, 
-                    "workflow_id": task.job.job_type_id, "executing_worker_id": "N/A",
+                    "model_id": task.model_data.id, "workflow_id": task.job.job_type_id, "executing_worker_id": "N/A",
                     "arrival_at_scheduler_timestamp": event.time, "last_dep_dispatch_timestamp": np.nan,
                     "arrival_at_worker_timestamp": np.nan, "execution_start_timestamp": np.nan, 
                     "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan
@@ -70,7 +70,7 @@ class Logger(EventListener):
             tasks: list[Task] = event.kwargs["tasks"]
             for task in tasks:
                 self.task_log.loc[(self.task_log["job_id"]==task.job.id) & \
-                                  (self.task_log["task_id"]==task.task_id), "dispatched_to_worker_timestamp"] = event.time
+                                  (self.task_log["task_id"]==task.task_id), "last_dep_dispatch_timestamp"] = event.time
         
         elif event.type.id == EventIds.TASKS_INPUTS_ARRIVAL_AT_WORKER:
             tasks: list[Task] = event.kwargs["tasks"]
