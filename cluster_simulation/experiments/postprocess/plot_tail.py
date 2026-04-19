@@ -24,18 +24,22 @@ def plot_response_time_tail_cdf(srcs: list[tuple[str, str]], split_by_workflow: 
 
     # Load and preprocess all sources once
     for dir, name in srcs:
-        data = pd.read_csv(os.path.join(dir, "job_log.csv"))
+        data = None
+        if os.path.exists(os.path.join(dir, "job_breakdown.csv")):
+            data = pd.read_csv(os.path.join(dir, "job_breakdown.csv"))
+            data = data.rename(columns={"workflow_type": "workflow_id"})
 
-        data.loc[data["was_completed"]==False, "response_time"] = np.inf
-
-        # drop_path = os.path.join(dir, "drop_log.csv")
-        # if os.path.exists(drop_path):
-        #     for _, dropped_row in pd.read_csv(drop_path).iterrows():
-        #         data.loc[len(data)] = {
-        #             "workflow_type": dropped_row["workflow_id"],
-        #             "job_create_time": dropped_row["create_time"],
-        #             "response_time": np.inf
-        #         }
+            drop_path = os.path.join(dir, "drop_log.csv")
+            if os.path.exists(drop_path):
+                for _, dropped_row in pd.read_csv(drop_path).iterrows():
+                    data.loc[len(data)] = {
+                        "workflow_id": dropped_row["workflow_id"],
+                        "job_create_time": dropped_row["create_time"],
+                        "response_time": np.inf
+                    }
+        else:
+            data = pd.read_csv(os.path.join(dir, "job_log.csv"))
+            data.loc[data["was_completed"]==False, "response_time"] = np.inf
 
         finite_max = data.loc[np.isfinite(data["response_time"]), "response_time"]
         if len(finite_max) > 0:
@@ -119,17 +123,22 @@ def plot_slo_as_job_size_vs_tail_cdf(srcs: list[tuple[str, str]], save_fig: bool
 
     # Load and preprocess all sources once
     for dir, name in srcs:
-        data = pd.read_csv(os.path.join(dir, "job_log.csv"))
-        data.loc[data["was_completed"]==False, "response_time"] = np.inf
+        data = None
+        if os.path.exists(os.path.join(dir, "job_breakdown.csv")):
+            data = pd.read_csv(os.path.join(dir, "job_breakdown.csv"))
+            data = data.rename(columns={"workflow_type": "workflow_id"})
 
-        # drop_path = os.path.join(dir, "drop_log.csv")
-        # if os.path.exists(drop_path):
-        #     for _, dropped_row in pd.read_csv(drop_path).iterrows():
-        #         data.loc[len(data)] = {
-        #             "workflow_type": dropped_row["workflow_id"],
-        #             "job_create_time": dropped_row["create_time"],
-        #             "response_time": np.inf
-        #         }
+            drop_path = os.path.join(dir, "drop_log.csv")
+            if os.path.exists(drop_path):
+                for _, dropped_row in pd.read_csv(drop_path).iterrows():
+                    data.loc[len(data)] = {
+                        "workflow_id": dropped_row["workflow_id"],
+                        "job_create_time": dropped_row["create_time"],
+                        "response_time": np.inf
+                    }
+        else:
+            data = pd.read_csv(os.path.join(dir, "job_log.csv"))
+            data.loc[data["was_completed"]==False, "response_time"] = np.inf
 
         finite_max = data.loc[np.isfinite(data["response_time"]), "response_time"]
         if len(finite_max) > 0:
