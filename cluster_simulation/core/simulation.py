@@ -481,8 +481,9 @@ class Simulation(object):
                     
                     next_job = client.create_job(job_type, job_id, curr_send_rate, curr_time)
                     self.jobs[next_job.id] = next_job
-                    curr_time = next_job.create_time + CPU_to_CPU_delay(
-                        sum(t.input_size for t in next_job.tasks if len(t.required_task_ids)))
+                    curr_time = next_job.create_time 
+                        # + CPU_to_CPU_delay(
+                        # sum(t.input_size for t in next_job.tasks if len(t.required_task_ids)))
 
                     if self.centralized_scheduler:
                         self.event_queue.put(EventOrders(

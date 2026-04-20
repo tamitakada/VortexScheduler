@@ -332,14 +332,14 @@ class HashTaskWorker(TaskWorker):
                     raise ValueError("Unknown dispatch policy")
 
                 job_exec_log = self.simulation.task_exec_log[self.simulation.task_exec_log["job_id"]==task.job.id]
-                last_dep_end_time = 0
-                for prev_id in task.required_task_ids:
-                    task_end_time = job_exec_log[job_exec_log["task_id"]==prev_id]["exec_end_time"].iloc[0]
-                    transfer_time = 0 if (job_exec_log[job_exec_log["task_id"]==prev_id]["worker_id"] == candidate_worker_id).sum() else \
-                        CPU_to_CPU_delay(task.job.get_task_by_id(prev_id).result_size)
-                    last_dep_end_time = max(last_dep_end_time, task_end_time + transfer_time)
+                # last_dep_end_time = 0
+                # for prev_id in task.required_task_ids:
+                #     task_end_time = job_exec_log[job_exec_log["task_id"]==prev_id]["exec_end_time"].iloc[0]
+                #     transfer_time = 0 if (job_exec_log[job_exec_log["task_id"]==prev_id]["worker_id"] == candidate_worker_id).sum() else \
+                #         CPU_to_CPU_delay(task.job.get_task_by_id(prev_id).result_size)
+                #     last_dep_end_time = max(last_dep_end_time, task_end_time) #+ transfer_time)
 
-                events.append(EventOrders(last_dep_end_time, TasksArrival(
+                events.append(EventOrders(current_time, TasksArrival(
                     self.simulation, self.simulation.workers[candidate_worker_id], [task])))
                 
                 # prev_curr = prev_curr + transfer_delay

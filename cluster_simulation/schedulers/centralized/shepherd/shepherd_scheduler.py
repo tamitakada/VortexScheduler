@@ -160,7 +160,7 @@ class ShepherdScheduler(Scheduler):
                         self.model_queues[state.model.data.id].remove(task)
 
                     events.append(EventOrders(
-                        current_time + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)),
+                        current_time, #+ CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)),
                         BatchArrivalAtWorker(self.simulation, worker, queued_batch, state.model.id)))
                 
                 elif gcfg.ENABLE_PREEMPTION and queued_batch.size() >= gcfg.FLEX_LAMBDA * curr_batch.size():
@@ -169,7 +169,7 @@ class ShepherdScheduler(Scheduler):
                         self.model_queues[state.model.data.id].remove(task)
                     
                     events.append(EventOrders(
-                        current_time + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)), 
+                        current_time,# + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)), 
                         BatchPreemptionScheduledAtWorker(self.simulation, worker, state.model.id, queued_batch, curr_batch.id)))
 
         self.last_worker_idx = (self.last_worker_idx + 1) % len(self.simulation.workers)
@@ -198,6 +198,6 @@ class ShepherdScheduler(Scheduler):
                 self.model_queues[completed_batch.model_data.id].remove(task)
                 
             return [EventOrders(
-                current_time + CPU_to_CPU_delay(sum(t.input_size for t in candidate_batch.tasks)), 
+                current_time, #+ CPU_to_CPU_delay(sum(t.input_size for t in candidate_batch.tasks)), 
                 BatchArrivalAtWorker(self.simulation, worker, candidate_batch, instance_id))]
         return []

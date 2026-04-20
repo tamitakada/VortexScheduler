@@ -53,9 +53,10 @@ class ShepherdWorker(TaskWorker):
         events = []
         for new_task in new_tasks:
             events.append(EventOrders(
-                max(new_task.job.get_task_by_id(t).log.task_execution_end_timestamp + CPU_to_CPU_delay(
-                        new_task.job.get_task_by_id(t).result_size)
-                    for t in new_task.required_task_ids),
+                current_time,
+                # max(new_task.job.get_task_by_id(t).log.task_execution_end_timestamp + CPU_to_CPU_delay(
+                #         new_task.job.get_task_by_id(t).result_size)
+                #     for t in new_task.required_task_ids),
                 TasksArrivalAtScheduler(self.simulation, [new_task])
             ))
         
