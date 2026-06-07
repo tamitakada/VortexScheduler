@@ -2,6 +2,8 @@ from events.event_manager import EventManager
 from events.event import *
 from events.event_types import *
 
+from core.data_models.workflow import Workflow
+
 from workers.worker import Worker
 
 import pandas as pd
@@ -10,11 +12,14 @@ import numpy as np
 
 class Logger(EventListener):
 
-    def __init__(self, em: EventManager, workers: dict[UUID, Worker]):
+    def __init__(self, em: EventManager, workers: dict[UUID, Worker], scheduler, workflows: list[Workflow], centralized):
         super().__init__(Agent.LOGGER)
 
         self.em = em
         self.workers = workers
+        self.is_centralized = centralized
+        self.scheduler = scheduler
+        self.workflows = workflows
 
         self.em.register_listener(self, {
             EVENT_TYPES[EventIds.JOB_SENT_TO_SCHEDULER],
@@ -42,8 +47,15 @@ class Logger(EventListener):
         self.worker_log = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "batch_id", "batched_job_task_ids", 
                                            "batch_size", "execution_start_timestamp", "execution_end_timestamp",
                                            "preempted_timestamp"])
+        self.work_log = pd.DataFrame(columns=["time", "worker_id", "instance_id", "model_id",
+                                              "total_incomplete_model_tasks", "worker_incomplete_tasks",
+                                              "is_active"])
         
-        self.unfinished_jobs: set[int] = set()
+        self.unfinished_jobs: list[Job] = []
+
+        model_ids = sorted(set(m.id for w in self.workflows.values() for m in w.get_models()))
+        self.unfinished_tasks: dict[int, list[tuple[int, int]]] = {mid: [] for mid in model_ids}
+
         self.deps_to_task = {}
 
     def _get_curr_idle_instances(self, time: float):
@@ -57,7 +69,7 @@ class Logger(EventListener):
     def on_event(self, event: Event):
         if event.type.id == EventIds.JOB_ARRIVAL_AT_SCHEDULER:
             job: Job = event.kwargs["job"]
-            self.unfinished_jobs.add(job.id)
+            self.unfinished_jobs.append(job)
             for task in job.tasks:
                 if len(task.required_task_ids) == 0:
                     self.task_log.loc[len(self.task_log)] = {
@@ -70,6 +82,8 @@ class Logger(EventListener):
                         "curr_idle_instances": self._get_curr_idle_instances(event.time),
                         "executing_worker_qlen_at_arrival": np.nan
                     }
+
+                    self.unfinished_tasks[task.model_data.id].append((task.job.id, task.task_id))
             
         elif event.type.id == EventIds.TASKS_ARRIVAL_AT_SCHEDULER:
             tasks: list[Task] = event.kwargs["tasks"]
@@ -84,6 +98,23 @@ class Logger(EventListener):
                     "curr_idle_instances": self._get_curr_idle_instances(event.time),
                     "executing_worker_qlen_at_arrival": np.nan
                 }
+
+                if self.is_centralized:
+                    for worker in self.workers.values():
+                        for state in worker.GPU_state.state_at(event.time):
+                            self.work_log.loc[len(self.work_log)] = {
+                                "time": event.time,
+                                "worker_id": worker.id,
+                                "model_id": state.model.data.id,
+                                "instance_id": state.model.id,
+                                "total_incomplete_model_tasks": len(
+                                    self.unfinished_tasks[state.model.data.id]), 
+                                "worker_incomplete_tasks": worker.get_remaining_work(
+                                    event.time, state.model.data.id),
+                                "is_active": state.reserved_batch != None 
+                            }
+                
+                    self.unfinished_tasks[task.model_data.id].append((task.job.id, task.task_id))
         
         elif event.type.id == EventIds.TASKS_INPUTS_SENT_TO_WORKER:
             tasks: list[Task] = event.kwargs["tasks"]
@@ -101,8 +132,9 @@ class Logger(EventListener):
                 self.task_log.loc[mask, "arrival_at_worker_timestamp"] = event.time
                 self.task_log.loc[mask, "executing_worker_qlen_at_arrival"] = \
                     self.workers[event.kwargs["to_worker_id"]].get_qlen(task.model_data.id)
-
-                assert(self.workers[event.kwargs["to_worker_id"]].get_qlen(task.model_data.id) > 0)
+                
+                if not self.is_centralized:
+                    assert(self.workers[event.kwargs["to_worker_id"]].get_qlen(task.model_data.id) > 0)
 
         elif event.type.id == EventIds.TASKS_ASSIGNED_TO_WORKER:
             tasks: list[Task] = event.kwargs["tasks"]
@@ -127,6 +159,22 @@ class Logger(EventListener):
                     if (task.job.id, rt) not in self.deps_to_task:
                         self.deps_to_task[(task.job.id, rt)] = []
                     self.deps_to_task[(task.job.id, rt)].append(task)
+            
+            if not self.is_centralized:
+                for worker in self.workers.values():
+                    for state in worker.GPU_state.state_at(event.time):
+                        self.work_log.loc[len(self.work_log)] = {
+                            "time": event.time,
+                            "worker_id": worker.id,
+                            "model_id": state.model.data.id,
+                            "instance_id": state.model.id,
+                            "total_incomplete_model_tasks": sum(
+                                w.get_remaining_work(event.time, state.model.data.id)
+                                for w in self.workers.values()),
+                            "worker_incomplete_tasks": worker.get_remaining_work(
+                                event.time, state.model.data.id),
+                            "is_active": state.reserved_batch != None 
+                        }
 
         elif event.type.id == EventIds.TASKS_OUTPUTS_SENT_TO_WORKER:
             tasks: list[Task] = event.kwargs["tasks"]
@@ -160,7 +208,7 @@ class Logger(EventListener):
                     self.task_log.loc[mask, "executing_worker_qlen_at_arrival"] = \
                         self.workers[event.kwargs["to_worker_id"]].get_qlen(succ.model_data.id)
 
-    
+
         elif event.type.id == EventIds.BATCH_STARTED_AT_WORKER:
             batch: Batch = event.kwargs["batch"]
             for task in batch.tasks:
@@ -182,6 +230,8 @@ class Logger(EventListener):
         elif event.type.id == EventIds.BATCH_FINISHED_AT_WORKER:
             batch: Batch = event.kwargs["batch"]
             for task in batch.tasks:
+                if self.is_centralized:
+                    self.unfinished_tasks[task.model_data.id].remove((task.job.id, task.task_id))
                 self.task_log.loc[(self.task_log["job_id"]==task.job.id) & \
                                   (self.task_log["task_id"]==task.task_id), "execution_end_timestamp"] = event.time
 
@@ -189,8 +239,9 @@ class Logger(EventListener):
             
         elif event.type.id == EventIds.JOBS_DROPPED:
             for job_id in event.kwargs["job_ids"]:
-                self.unfinished_jobs.remove(job_id)
+                self.unfinished_jobs = [j for j in self.unfinished_jobs if j.id != job_id]
                 self.task_log.loc[self.task_log["job_id"]==job_id, "dropped_timestamp"] = event.time
 
         elif event.type.id == EventIds.RESPONSE_SENT_TO_CLIENT:
-            self.unfinished_jobs.remove(event.kwargs["job"].id)
+            if event.kwargs["job"] in self.unfinished_jobs:
+                self.unfinished_jobs.remove(event.kwargs["job"])

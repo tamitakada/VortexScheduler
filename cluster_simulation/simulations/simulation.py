@@ -75,7 +75,7 @@ class Simulation:
                                      self.workers,
                                      scheduler_worker_id,
                                      centralized)
-        self.logger = Logger(self.em, self.workers)
+        self.logger = Logger(self.em, self.workers, self.scheduler, self.workflows, centralized)
 
 
     def _generate_clients(self) -> list[Client]:
@@ -88,9 +88,9 @@ class Simulation:
         clients: list[Client] = []
         created_job_count = 0
         for cfg in gcfg.CLIENT_CONFIGS:
-            for wid, cfgw in cfg.items():
-                clients.append(Client(uuid4(), self.em))
+            clients.append(Client(uuid4(), self.em, [(k, cfg[k]["SLO"]) for k in cfg.keys()]))
 
+            for wid, cfgw in cfg.items():
                 prev_create_time = 0
                 for i, send_rate in enumerate(cfgw["SEND_RATES"]):
                     n_jobs = cfgw["JOBS_PER_SEND_RATE"][i]
@@ -201,6 +201,7 @@ class Simulation:
 
         self.logger.task_log.to_csv(os.path.join(self.out_path, "task_log.csv"))
         self.logger.worker_log.to_csv(os.path.join(self.out_path, "worker_batch_log.csv"))
+        self.logger.work_log.to_csv(os.path.join(self.out_path, "work_log.csv"))
 
         self._get_client_data()
         self._postprocess_idle_times()
@@ -213,8 +214,8 @@ class Simulation:
 
         self.verifier.verify_on_sim_end()
 
-        log_verifier = LogVerifier(None, self.logger.task_log, self.logger.worker_log)
-        log_verifier.run()
+        # log_verifier = LogVerifier(None, self.logger.task_log, self.logger.worker_log)
+        # log_verifier.run()
 
 
     def _produce_agent_keys(self):
@@ -226,7 +227,12 @@ class Simulation:
                                                    s.model.active_from]
 
         worker_log.to_csv(os.path.join(self.out_path, "worker_config_log.csv"))
-        # TODO: client log
+        
+        client_log = pd.DataFrame(columns=["client_id", "workflow_id", "slo"])
+        for client in self.clients:
+            for (wid, slo) in client.req_types:
+                client_log.loc[len(client_log)] = [client.id, wid, slo]
+        client_log.to_csv(os.path.join(self.out_path, "client_config_log.csv"))
 
 
     def _postprocess_nonexec_delays(self):

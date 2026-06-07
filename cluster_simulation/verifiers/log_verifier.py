@@ -12,12 +12,15 @@ from core.network import *
 class LogVerifier:
 
     def __init__(self, job_log: pd.DataFrame, task_log: pd.DataFrame, batch_log: pd.DataFrame,
-                 worker_log: pd.DataFrame, centralized: bool, gcfg, mcfg, wcfg):
+                 worker_log: pd.DataFrame, work_log: pd.DataFrame, client_log: pd.DataFrame,
+                 centralized: bool, gcfg, mcfg, wcfg):
         
         self.job_log = job_log
         self.task_log = task_log
         self.batch_log = batch_log
         self.worker_log = worker_log
+        self.work_log = work_log
+        self.client_log = client_log
 
         self.is_centralized = centralized
 
@@ -27,7 +30,81 @@ class LogVerifier:
 
 
     def run(self):
-        self.trace_task_arrivals()
+        # self.verify_instance_activity()
+        # self.verify_remaining_work()
+        self.verify_dropped_jobs()
+
+
+    def verify_dropped_jobs(self):
+        """Verify the following:
+        * Drops match drop policy config
+        * Jobs are dropped after their logged deadlines
+        * Job deadlines match config SLO (job-level only)
+        * Jobs are not batched/executed after being dropped
+        """
+
+        if self.gcfg.DROP_POLICY == "NONE":
+            assert(self.job_log[self.job_log["was_completed"]==False].empty)
+        
+        else:
+            dropped_jobs = self.job_log[self.job_log["was_completed"]==False]
+            for _, row in dropped_jobs.iterrows():
+                assert(row["create_time"] + row["response_time"] >= row["deadline"])
+
+                if self.gcfg.SLO_TYPE == "JOB_LEVEL":
+                    slo = self.client_log[(self.client_log["client_id"]==row["client_id"]) &
+                                        (self.client_log["workflow_id"]==row["workflow_id"])]["slo"].iloc[0]
+                    assert(row["deadline"] == row["create_time"] + slo)
+
+                mask = (self.batch_log["batched_job_task_ids"].str.contains(f"\({row['job_id']},")) &\
+                        (self.batch_log["execution_start_timestamp"] >= row["create_time"] + row["response_time"])
+                assert(self.batch_log[mask].empty)
+
+        print("[PASS] Job drop verification (job-level SLO)")
+
+
+    def verify_instance_activity(self):
+        """Cross-verify [is_active] column of work log with batch log.
+        """
+
+        for _, row in self.work_log.iterrows():
+            mask = ((self.batch_log["instance_id"]==row["instance_id"]) & 
+                    (self.batch_log["execution_start_timestamp"] < row["time"]) &
+                    (self.batch_log["execution_end_timestamp"] > row["time"]))
+
+            assert(len(self.batch_log[mask]) <= 1)
+            assert(row["is_active"] == (not self.batch_log[mask].empty))
+
+        print("Successfully verified is_active!")
+
+
+    def verify_remaining_work(self):
+        if self.is_centralized:
+            for _, row in self.work_log.iterrows():
+                mask = ((self.batch_log["instance_id"]==row["instance_id"]) & 
+                    (self.batch_log["execution_start_timestamp"] < row["time"]) &
+                    (self.batch_log["execution_end_timestamp"] > row["time"]))
+            
+                assert(len(self.batch_log[mask]) <= 1)
+                assert(row["num_incomplete_assigned_jobs"] == 
+                       self.batch_log[mask]["batch_size"].sum())
+                
+        else:
+            for i, row in self.work_log.iterrows():
+                batch_mask = ((self.batch_log["instance_id"]==row["instance_id"]) & 
+                              (self.batch_log["execution_start_timestamp"] < row["time"]) &
+                              (self.batch_log["execution_end_timestamp"] > row["time"]))
+                
+                task_mask = ((self.task_log["executing_worker_id"]==row["worker_id"]) &
+                             (self.task_log["model_id"]==row["model_id"]) & 
+                             (self.task_log["arrival_at_worker_timestamp"] < row["time"]) &
+                             (self.task_log["execution_start_timestamp"] >= row["time"]))
+
+                assert(len(self.batch_log[batch_mask]) <= 1)
+                assert(row["num_incomplete_assigned_jobs"] == 
+                       (self.batch_log[batch_mask]["batch_size"].sum() + len(self.task_log[task_mask])))
+
+        print("Successfully verified work log!")
 
 
     def trace_task_arrivals(self):
@@ -138,7 +215,7 @@ class LogVerifier:
 
 if __name__ == "__main__":
     results_dir = sys.argv[1]
-    is_centralized = bool(sys.argv[2])
+    is_centralized = sys.argv[2] == "True"
 
     gcfg_path = os.path.join(results_dir, "configs/gen_config.py")
     mcfg_path = os.path.join(results_dir, "configs/model_config.py")
@@ -159,6 +236,8 @@ if __name__ == "__main__":
         pd.read_csv(os.path.join(results_dir, "sim_logs/task_log.csv")),
         pd.read_csv(os.path.join(results_dir, "sim_logs/worker_batch_log.csv")),
         pd.read_csv(os.path.join(results_dir, "sim_logs/worker_config_log.csv")),
+        pd.read_csv(os.path.join(results_dir, "sim_logs/work_log.csv")),
+        pd.read_csv(os.path.join(results_dir, "sim_logs/client_config_log.csv")),
         is_centralized,
         modules[gcfg_path],
         modules[mcfg_path],

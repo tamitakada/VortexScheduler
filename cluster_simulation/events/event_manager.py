@@ -76,8 +76,8 @@ class EventManager:
                 queued_event.time == event.time and \
                 queued_event.kwargs == event.kwargs:
 
-                if queued_event.type.id == EventIds.CHECK_QUEUE_AT_WORKER:
-                    print("[WARNING] Duplicate CHECK_QUEUE event queued, ignoring add_event")
+                if queued_event.type.id in [EventIds.CHECK_QUEUE_AT_WORKER, EventIds.JOBS_DROPPED]:
+                    print("[WARNING] Duplicate event queued, ignoring add_event")
                     return
 
                 else:
@@ -103,8 +103,8 @@ class EventManager:
         if gcfg.PRODUCE_EVENT_LOG:
             self.event_log.loc[len(self.event_log)] = [event.time, str(event)]
 
-        # print("Received event: ", event)
-        # print()
+        print("Received event: ", event)
+        print()
 
         # notify all listeners
         for listener_id in self._event_listeners[event.type.id]:

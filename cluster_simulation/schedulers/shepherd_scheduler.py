@@ -46,6 +46,35 @@ class ShepherdScheduler(Scheduler):
         self.last_sent_tasks_to: dict[int, tuple[UUID, UUID]] = {}
 
 
+    def check_dropped_tasks(self, time: float):
+        """NOTE: For CENTRAL, drops tasks immediately (since requesting scheduling 
+        & executing scheduling are not disaggregated); for DECENTRAL, drops tasks
+        only once JOBS_DROPPED event is received
+        """
+
+        if gcfg.DROP_POLICY == "NONE":
+            return
+        
+        elif gcfg.DROP_POLICY == "LAZY":
+            dropped = []
+            for q in self.queues.values():
+                filtered = []
+                while q.qsize() > 0:
+                    qt = q.get()
+                    if time >= qt.task.get_task_deadline():
+                        dropped.append(qt.task)
+                    else:
+                        filtered.append(qt)
+
+                for qt in filtered:
+                    q.put(qt)
+
+            if dropped:
+                self.em.add_event(Event(time,
+                                        EVENT_TYPES[EventIds.JOBS_DROPPED],
+                                        kwargs={"job_ids": set(t.job.id for t in dropped)}), self.emitter_id) 
+
+
     def on_job_arrival(self, time: float, job: Job):
         self.arrived_jobs[job.id] = job
         return self.on_tasks_arrival(time, 
@@ -53,6 +82,8 @@ class ShepherdScheduler(Scheduler):
     
 
     def on_tasks_arrival(self, time: float, tasks: list[Task]):
+        self.check_dropped_tasks(time)
+
         model_ids_to_check = set()
         for task in tasks:
             model_ids_to_check.add(task.model_data.id)
@@ -73,22 +104,8 @@ class ShepherdScheduler(Scheduler):
             for (worker, instance_state) in relevant_instances:
                 self._schedule_instance_if_idle(time, worker.id, instance_state.model.id,
                                                 not gcfg.ENABLE_NETWORKING_DELAYS)
+                
 
-                # TODO: preemption
-                # curr_batch = None
-                # if (worker.id, state.model.id) in self.scheduled_batch_to_instance:
-                #     curr_batch = self.scheduled_batch_to_instance.inv[(worker.id, state.model.id)]
-
-                # if not curr_batch:
-
-                # elif gcfg.ENABLE_PREEMPTION and queued_batch.size() >= gcfg.FLEX_LAMBDA * curr_batch.size():
-                #     self.scheduled_batch_to_instance[(worker.id, state.model.id)] = queued_batch
-                #     for task in queued_batch.tasks:
-                #         self.model_queues[state.model.data.id].remove(task)
-                    
-                #     events.append(EventOrders(
-                #         current_time + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)), 
-                #         BatchPreemptionScheduledAtWorker(self.simulation, worker, state.model.id, queued_batch, curr_batch.id)))
     
 
     def on_jobs_dropped(self, time: float, job_ids: list[int]):
@@ -111,6 +128,8 @@ class ShepherdScheduler(Scheduler):
     
 
     def _schedule_instance_if_idle(self, time: float, worker_id: UUID, instance_id: UUID, ignore_transfer_time: bool):
+        self.check_dropped_tasks(time)
+        
         worker = self.workers[worker_id]
         instance_state = worker.GPU_state.get_instance_state(instance_id, time)
 
@@ -174,3 +193,21 @@ class ShepherdScheduler(Scheduler):
                                     "from_worker_id": from_worker_id,
                                     "to_worker_id": worker.id}),
                         self.emitter_id)
+                    
+        elif gcfg.ENABLE_PREEMPTION:
+            curr_batch = self.scheduled_batch_to_instance[(worker.id, instance_state.model.id)]
+            queued_batch = TaskBatcher.get_batch(
+                time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True)
+            
+            if queued_batch.size() >= gcfg.FLEX_LAMBDA * len(curr_batch):
+                assert(False)
+                # self.scheduled_batch_to_instance[(worker.id, instance_state.model.id)] = queued_batch
+                # for task in queued_batch.tasks:
+                #     self.queues[instance_state.model.data.id].remove(task)
+                
+                # events.append(EventOrders(
+                #     current_time + CPU_to_CPU_delay(sum(t.input_size for t in queued_batch.tasks)), 
+                #     BatchPreemptionScheduledAtWorker(self.simulation, worker, state.model.id, queued_batch, curr_batch.id)))
+                    
+    def get_qlen(self, model_id: int):
+        return self.queues[model_id].qsize() if model_id in self.queues else 0

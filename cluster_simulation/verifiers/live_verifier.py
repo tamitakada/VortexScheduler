@@ -147,10 +147,11 @@ class LiveVerifier(EventListener):
                 # for all tasks, under LARGEST_FEASIBLE policy should NOT
                 # violate SLO
                 if gcfg.BATCH_POLICY == "LARGEST_FEASIBLE":
-                    deadline = self.clients[t.job.client_id][3]
-                    worker = self.workers[event.kwargs["worker_id"]]
-                    expected_end_time = event.time + t.model_data.batch_exec_times[worker.total_memory_gb][batch.size()]
-                    assert(expected_end_time <= deadline)
+                    for task in batch.tasks:
+                        deadline = task.get_task_deadline()
+                        worker = self.workers[event.kwargs["worker_id"]]
+                        expected_end_time = event.time + t.model_data.batch_exec_times[worker.total_memory_gb][batch.size()]
+                        assert(expected_end_time <= deadline)
 
                 # for all tasks, should be anticipated
                 if (t.job.id, t.task_id) in self.task_exec_queue:

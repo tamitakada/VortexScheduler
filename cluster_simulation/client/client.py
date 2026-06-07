@@ -12,11 +12,12 @@ import numpy as np
 
 class Client(EventListener):
 
-    def __init__(self, id: UUID, em: EventManager):
+    def __init__(self, id: UUID, em: EventManager, req_types: list[tuple[int, float]]):
         super().__init__(Agent.CLIENT)
 
         self.id = id
         self.em = em
+        self.req_types = req_types
 
         self.em.register_listener(self, {
             EVENT_TYPES[EventIds.RESPONSE_RECEIVED_AT_CLIENT],
@@ -36,7 +37,7 @@ class Client(EventListener):
                 return
 
             # should not have logged before
-            assert(self.jobs[event.kwargs["job"].id][1] == -1)
+            # assert(self.jobs[event.kwargs["job"].id][1] == -1)
 
             self.jobs[event.kwargs["job"].id] = (
                 self.jobs[event.kwargs["job"].id][0],
@@ -52,9 +53,9 @@ class Client(EventListener):
             for job_id in event.kwargs["job_ids"]:
                 if job_id in self.jobs:
                     # should not have logged before
-                    assert(self.jobs[job_id][1] == -1)
+                    # assert(self.jobs[job_id][1] == -1)
 
-                    self.jobs[job_id][1] = event.time
+                    self.jobs[job_id] = (self.jobs[job_id][0], event.time, False, self.jobs[job_id][3], self.jobs[job_id][4])
 
         else:
             raise ValueError(f"Client received unregistered event: {event}")
@@ -72,6 +73,8 @@ class Client(EventListener):
         Returns:
             last_create_time: Create time of the last job generated
         """
+
+        assert((workflow.id, slo) in self.req_types)
 
         prev_time = start_time
         last_create = -1

@@ -159,6 +159,9 @@ class Worker(EventListener):
                 self.queues[task.model_data.id] = PriorityQueue()
             self.queues[task.model_data.id].put(QueuedTask(task))
 
+        # before checking queue to form batches, check for jobs to drop
+        self.check_dropped_tasks(time)
+
         for model_id in set(t.model_data.id for t in tasks):
             self.em.add_event(
                 Event(time, 
@@ -232,11 +235,28 @@ class Worker(EventListener):
         for q in self.queues.values():
             filtered = []
             while q.qsize() > 0:
-                task: Task = q.get()
-                if task.job.id not in job_ids: 
-                    filtered.append(task)
+                qt: QueuedTask = q.get()
+                if qt.task.job.id not in job_ids: 
+                    filtered.append(qt)
             
             for t in filtered: q.put(t)
+
+    
+    def check_dropped_tasks(self, time: float):
+        if gcfg.DROP_POLICY == "NONE":
+            return
+        
+        elif gcfg.DROP_POLICY == "LAZY":
+            dropped = []
+            for q in self.queues.values():
+                for qt in q.queue:
+                    if time >= qt.task.get_task_deadline():
+                        dropped.append(qt.task)
+
+            if dropped:
+                self.em.add_event(Event(time,
+                                        EVENT_TYPES[EventIds.JOBS_DROPPED],
+                                        kwargs={"job_ids": set(t.job.id for t in dropped)}), self.emitter_id)    
 
 
     def on_check_queue(self, time: float, model_id: int):
@@ -316,6 +336,9 @@ class Worker(EventListener):
         
         assert(self.GPU_state.does_have_idle_copy(batch.model_data.id, time))
 
+        # before checking queue to form batches, check for jobs to drop
+        self.check_dropped_tasks(time)
+
         self.em.add_event(
             Event(time, 
                     EVENT_TYPES[EventIds.CHECK_QUEUE_AT_WORKER],
@@ -372,6 +395,13 @@ class Worker(EventListener):
     
     def get_qlen(self, model_id: int):
         return self.queues[model_id].qsize() if model_id in self.queues else 0
+    
+    def get_remaining_work(self, time: float, model_id: int):
+        relevant_instances = [s for s in self.GPU_state.state_at(time)
+                              if s.model.data.id == model_id]
+        
+        return self.get_qlen(model_id) + sum((s.reserved_batch.size() if s.reserved_batch else 0)
+                                             for s in relevant_instances)
 
     def __hash__(self):
         return hash(self.id)
