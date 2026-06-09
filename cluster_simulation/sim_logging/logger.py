@@ -42,7 +42,7 @@ class Logger(EventListener):
 
         self.task_log = pd.DataFrame(columns=["job_id", "task_id", "client_id", "workflow_id", "model_id", "executing_worker_id",
                                          "arrival_at_scheduler_timestamp", "last_dep_dispatch_timestamp", "arrival_at_worker_timestamp",
-                                         "execution_start_timestamp", "execution_end_timestamp", "dropped_timestamp", 
+                                         "execution_start_timestamp", "execution_end_timestamp", "dropped_timestamp", "dropped_at_task_id",
                                          "curr_unfinished_jobs", "curr_idle_instances", "executing_worker_qlen_at_arrival"])
         self.worker_log = pd.DataFrame(columns=["worker_id", "instance_id", "model_id", "batch_id", "batched_job_task_ids", 
                                            "batch_size", "execution_start_timestamp", "execution_end_timestamp",
@@ -77,7 +77,7 @@ class Logger(EventListener):
                         "model_id": task.model_data.id, "workflow_id": job.job_type_id, "executing_worker_id": "N/A",
                         "arrival_at_scheduler_timestamp": event.time, "arrival_at_worker_timestamp": np.nan,
                         "last_dep_dispatch_timestamp": np.nan, "execution_start_timestamp": np.nan, 
-                        "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan,
+                        "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan, "dropped_at_task_id": np.nan,
                         "curr_unfinished_jobs": len(self.unfinished_jobs), 
                         "curr_idle_instances": self._get_curr_idle_instances(event.time),
                         "executing_worker_qlen_at_arrival": np.nan
@@ -93,7 +93,7 @@ class Logger(EventListener):
                     "model_id": task.model_data.id, "workflow_id": task.job.job_type_id, "executing_worker_id": "N/A",
                     "arrival_at_scheduler_timestamp": event.time, "last_dep_dispatch_timestamp": np.nan,
                     "arrival_at_worker_timestamp": np.nan, "execution_start_timestamp": np.nan, 
-                    "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan,
+                    "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan, "dropped_at_task_id": np.nan,
                     "curr_unfinished_jobs": len(self.unfinished_jobs), 
                     "curr_idle_instances": self._get_curr_idle_instances(event.time),
                     "executing_worker_qlen_at_arrival": np.nan
@@ -147,7 +147,7 @@ class Logger(EventListener):
                         "executing_worker_id":  event.kwargs["worker_id"],
                         "arrival_at_scheduler_timestamp": np.nan, "last_dep_dispatch_timestamp": np.nan,
                         "arrival_at_worker_timestamp": event.time, "execution_start_timestamp": np.nan, 
-                        "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan,
+                        "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan, "dropped_at_task_id": np.nan,
                         "curr_unfinished_jobs": len(self.unfinished_jobs), 
                         "curr_idle_instances": self._get_curr_idle_instances(event.time),
                         "executing_worker_qlen_at_arrival": np.nan
@@ -238,9 +238,10 @@ class Logger(EventListener):
             self.worker_log.loc[self.worker_log["batch_id"]==batch.id, "execution_end_timestamp"] = event.time
             
         elif event.type.id == EventIds.JOBS_DROPPED:
-            for job_id in event.kwargs["job_ids"]:
+            for job_id, task_id in event.kwargs["job_task_ids"]:
                 self.unfinished_jobs = [j for j in self.unfinished_jobs if j.id != job_id]
                 self.task_log.loc[self.task_log["job_id"]==job_id, "dropped_timestamp"] = event.time
+                self.task_log.loc[self.task_log["job_id"]==job_id, "dropped_at_task_id"] = task_id
 
         elif event.type.id == EventIds.RESPONSE_SENT_TO_CLIENT:
             if event.kwargs["job"] in self.unfinished_jobs:

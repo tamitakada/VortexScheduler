@@ -1,5 +1,6 @@
 from core.job import Job
 from core.task import Task
+from core.allocation import ModelAllocation
 
 from events.event_manager import EventManager
 from events.event import *
@@ -8,10 +9,11 @@ from events.event_types import *
 
 class Scheduler(EventListener):
 
-    def __init__(self, em: EventManager):
+    def __init__(self, em: EventManager, allocation: ModelAllocation):
         super().__init__(Agent.SCHEDULER)
 
         self.em = em
+        self.allocation = allocation
 
         self.em.register_listener(self, {
             EVENT_TYPES[EventIds.JOB_ARRIVAL_AT_SCHEDULER],
@@ -34,7 +36,7 @@ class Scheduler(EventListener):
         elif event.type.id == EventIds.TASKS_ARRIVAL_AT_SCHEDULER:
             self.on_tasks_arrival(event.time, event.kwargs["tasks"])
         elif event.type.id == EventIds.JOBS_DROPPED:
-            self.on_jobs_dropped(event.time, event.kwargs["job_ids"])
+            self.on_jobs_dropped(event.time, event.kwargs["job_task_ids"])
         elif event.type.id == EventIds.BATCH_STARTED_AT_WORKER:
             self.on_batch_start(event.time, event.kwargs["batch"], event.kwargs["worker_id"],
                                 event.kwargs["model_instance_id"])
@@ -50,7 +52,7 @@ class Scheduler(EventListener):
     def on_tasks_arrival(self, time: float, tasks: list[Task]):
         raise NotImplementedError()
 
-    def on_jobs_dropped(self, time: float, job_ids: int):
+    def on_jobs_dropped(self, time: float, job_task_ids: list[tuple[int, int]]):
         raise NotImplementedError()
     
     def on_batch_start(self, time: float, batch: Batch, worker_id: UUID, instance_id: UUID):

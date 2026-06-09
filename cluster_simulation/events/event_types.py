@@ -123,7 +123,7 @@ EVENT_TYPES: dict[int, EventType] = {
 
     EventIds.JOBS_DROPPED: EventType(
         EventIds.JOBS_DROPPED, "Jobs Dropped",
-        kwargs={"job_ids": True},
+        kwargs={"job_task_ids": True},
         emitter_types=[Agent.SCHEDULER, Agent.WORKER],
         listener_types=[Agent.SCHEDULER, Agent.WORKER, Agent.CLIENT, Agent.LOGGER, Agent.VERIFIER]),
 

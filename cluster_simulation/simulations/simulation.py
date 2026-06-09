@@ -1,5 +1,7 @@
 import os
 import pandas as pd
+import json
+import numpy as np
 
 import core.configs.gen_config as gcfg
 import core.configs.workflow_config as wcfg
@@ -51,11 +53,11 @@ class Simulation:
 
             if gcfg.DISPATCH_POLICY == "SHEPHERD":
                 self.scheduler = ShepherdScheduler(
-                    self.em, self.workers, self.workflows, scheduler_worker_id)
+                    self.em, self.allocation, self.workers, self.workflows, scheduler_worker_id)
             
             elif gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
                 self.scheduler = CentralRoundRobinScheduler(
-                    self.em, self.workers, self.workflows, scheduler_worker_id)
+                    self.em, self.allocation, self.workers, self.workflows, scheduler_worker_id)
                 
             else:
                 assert("Unknown central dispatch policy")
@@ -63,7 +65,7 @@ class Simulation:
         else:
             if gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
                 self.scheduler = DecentralRoundRobinScheduler(
-                    self.em, self.workers, self.workflows)
+                    self.em, self.allocation, self.workers, self.workflows)
                 
             else:
                 assert("Unknown decentral dispatch policy")
@@ -192,7 +194,7 @@ class Simulation:
     def run(self):
         while self.em.has_events():
             self.em.process_next_event()
-        
+
         sampled_anomalies = self.verifier.sampled_anomalies / self.verifier.total_samples
         if sampled_anomalies > 0.05:
             RED_BOLD = "\033[1;31m"
@@ -202,6 +204,10 @@ class Simulation:
         self.logger.task_log.to_csv(os.path.join(self.out_path, "task_log.csv"))
         self.logger.worker_log.to_csv(os.path.join(self.out_path, "worker_batch_log.csv"))
         self.logger.work_log.to_csv(os.path.join(self.out_path, "work_log.csv"))
+
+        with open(os.path.join(self.out_path, "nexus_task_slo_log.json"), "w") as f:
+            f.write(json.dumps({k1: {k2: v2[0] for k2, v2 in v1.items()} 
+                                for k1, v1 in self.scheduler.workflow_task_slos.items()}))
 
         self._get_client_data()
         self._postprocess_idle_times()
@@ -214,17 +220,14 @@ class Simulation:
 
         self.verifier.verify_on_sim_end()
 
-        # log_verifier = LogVerifier(None, self.logger.task_log, self.logger.worker_log)
-        # log_verifier.run()
-
 
     def _produce_agent_keys(self):
         worker_log = pd.DataFrame(columns=["worker_id", "worker_creation_timestamp", "instance_id", "model_id",
-                                           "instance_loaded_timestamp"])
+                                           "instance_loaded_timestamp", "worker_mem_size_gb"])
         for worker in self.workers.values():
             for s in worker.GPU_state.state_at(0):
                 worker_log.loc[len(worker_log)] = [worker.id, worker.create_time, s.model.id, s.model.data.id,
-                                                   s.model.active_from]
+                                                   s.model.active_from, worker.total_memory_gb]
 
         worker_log.to_csv(os.path.join(self.out_path, "worker_config_log.csv"))
         
@@ -275,14 +278,18 @@ class Simulation:
 
     def _get_client_data(self):
         jobs_df = pd.DataFrame(columns=["client_id", "workflow_id", "job_id", "was_completed",
-                                        "deadline", "create_time", "response_time"])
+                                        "drop_task_id", "deadline", "create_time", "response_time"])
         for client in self.clients:
             for jid, (create_time, finish_time, was_completed, deadline, job) in client.jobs.items():
+                drop_ids = self.logger.task_log[self.logger.task_log["job_id"]==jid]["dropped_at_task_id"].dropna().unique()
+                assert(was_completed or len(drop_ids) == 1)
+
                 jobs_df.loc[len(jobs_df)] = {
                     "client_id": client.id,
                     "workflow_id": job.job_type_id,
                     "job_id": jid,
                     "was_completed": was_completed,
+                    "drop_task_id": drop_ids[0] if not was_completed else np.nan,
                     "deadline": deadline,
                     "create_time": create_time,
                     "response_time": finish_time - create_time

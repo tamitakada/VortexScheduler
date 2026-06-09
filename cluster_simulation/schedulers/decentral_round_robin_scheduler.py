@@ -3,7 +3,7 @@ import numpy as np
 
 from core.job import Job
 from core.task import Task
-
+from core.allocation import ModelAllocation
 from core.data_models.workflow import Workflow
 
 from workers.worker import Worker
@@ -17,8 +17,9 @@ from events.event_types import *
 
 class DecentralRoundRobinScheduler(Scheduler):
 
-    def __init__(self, em: EventManager, workers: dict[UUID, Worker], workflows: list[Workflow]):
-        super().__init__(em)
+    def __init__(self, em: EventManager, allocation: ModelAllocation, workers: dict[UUID, Worker], 
+                 workflows: dict[int, Workflow]):
+        super().__init__(em, allocation)
 
         self.workers = workers
         self.workflows = workflows
@@ -84,7 +85,7 @@ class DecentralRoundRobinScheduler(Scheduler):
                 self.emitter_id)
     
 
-    def on_jobs_dropped(self, time: float, job_ids: list[int]):
+    def on_jobs_dropped(self, time: float, job_task_ids: list[tuple[int, int]]):
         pass
     
 

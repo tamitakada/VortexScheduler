@@ -1,6 +1,7 @@
 import sys
 import os
 import ast
+import json
 import importlib.util
 
 import numpy as np
@@ -13,7 +14,7 @@ class LogVerifier:
 
     def __init__(self, job_log: pd.DataFrame, task_log: pd.DataFrame, batch_log: pd.DataFrame,
                  worker_log: pd.DataFrame, work_log: pd.DataFrame, client_log: pd.DataFrame,
-                 centralized: bool, gcfg, mcfg, wcfg):
+                 slo_log: dict[int, dict[int, float]], centralized: bool, gcfg, mcfg, wcfg):
         
         self.job_log = job_log
         self.task_log = task_log
@@ -21,6 +22,7 @@ class LogVerifier:
         self.worker_log = worker_log
         self.work_log = work_log
         self.client_log = client_log
+        self.slo_log = slo_log
 
         self.is_centralized = centralized
 
@@ -30,16 +32,82 @@ class LogVerifier:
 
 
     def run(self):
-        # self.verify_instance_activity()
-        # self.verify_remaining_work()
+        self.verify_arrival_rates()
+        self.verify_allocation()
+        self.verify_batch_sizes()
+        self.verify_instance_activity()
         self.verify_dropped_jobs()
+        # self.trace_task_arrivals()
+
+
+    def verify_arrival_rates(self):
+        for i, client_id in enumerate(self.client_log["client_id"].unique()):
+            client_jobs = self.job_log[self.job_log["client_id"]==client_id]
+            
+            for workflow_id, cfg in self.gcfg.CLIENT_CONFIGS[i].items():
+                workflow_jobs = client_jobs[client_jobs["workflow_id"]==workflow_id]
+                start_idx = 0
+                for j, send_rate in enumerate(cfg["SEND_RATES"]):
+                    num_jobs = cfg["JOBS_PER_SEND_RATE"][j]
+                    create_intvl = workflow_jobs.iloc[start_idx:start_idx+num_jobs]["create_time"].diff().mean()
+                    assert(abs(create_intvl - 1000 / send_rate) < 2) # must be within 2ms
+                    start_idx += num_jobs
+
+        assert(self.client_log["client_id"].nunique() == len(self.gcfg.CLIENT_CONFIGS))
+        
+        print("[PASS] Arrival rate verification")
+
+
+    def verify_allocation(self):
+        if self.gcfg.ALLOCATION_STRATEGY != "CUSTOM":
+            return
+        
+        # check worker exists for each specified config
+        worker_cfgs = {}
+        for _, row in self.worker_log.iterrows():
+            if row["instance_loaded_timestamp"] > 0:
+                continue # only looking at init state
+
+            if row["worker_id"] not in worker_cfgs:
+                worker_cfgs[row["worker_id"]] = (row["worker_mem_size_gb"], [])
+            worker_cfgs[row["worker_id"]][1].append(row["model_id"])
+
+        for cfg in self.gcfg.CUSTOM_ALLOCATION:
+            found = False
+            for k, (mem_size, model_ids) in worker_cfgs.items():
+                if mem_size == cfg[0] and sorted(model_ids) == sorted(cfg[1]):
+                    worker_cfgs.pop(k)
+                    found = True
+                    break
+            
+            assert(found) # didn't find required worker config
+
+        assert(self.worker_log["worker_id"].nunique() == len(self.gcfg.CUSTOM_ALLOCATION))
+
+        # check batch never executes on worker without instance
+        for _, row in self.batch_log.iterrows():
+            assert(((self.worker_log["worker_id"]==row["worker_id"]) &
+                   (self.worker_log["instance_id"]==row["instance_id"]) &
+                   (self.worker_log["model_id"]==row["model_id"]) &
+                   (self.worker_log["instance_loaded_timestamp"] <= row["execution_start_timestamp"])).any())
+
+        print("[PASS] Configured allocation and worker instance/batch execution correspondence verification")
+
+
+    def verify_batch_sizes(self):
+        for i, cfg in enumerate(self.mcfg.MODELS):
+            model_log = self.batch_log[self.batch_log["model_id"]==i]
+            assert((model_log["batch_size"] <= cfg["MAX_BATCH_SIZE"]).all())
+            assert((model_log["batch_size"] >= 1).all())
+
+        print("[PASS] Min/max batch size verification")
 
 
     def verify_dropped_jobs(self):
         """Verify the following:
         * Drops match drop policy config
         * Jobs are dropped after their logged deadlines
-        * Job deadlines match config SLO (job-level only)
+        * Job deadlines match config SLO and (if Nexus) logged task level SLO split
         * Jobs are not batched/executed after being dropped
         """
 
@@ -48,19 +116,41 @@ class LogVerifier:
         
         else:
             dropped_jobs = self.job_log[self.job_log["was_completed"]==False]
-            for _, row in dropped_jobs.iterrows():
-                assert(row["create_time"] + row["response_time"] >= row["deadline"])
 
-                if self.gcfg.SLO_TYPE == "JOB_LEVEL":
-                    slo = self.client_log[(self.client_log["client_id"]==row["client_id"]) &
-                                        (self.client_log["workflow_id"]==row["workflow_id"])]["slo"].iloc[0]
+            if self.gcfg.SLO_TYPE == "NEXUS":
+                # dropped tasks are dropped after task SLO + task arrival time
+                dropped_tasks = self.task_log.replace("", np.nan).dropna()
+                dropped_tasks = dropped_tasks[dropped_tasks["task_id"]==dropped_tasks["dropped_at_task_id"]]
+                for w in set(dropped_tasks["workflow_id"]):
+                    assert((dropped_tasks["dropped_time"] >= dropped_tasks["arrival_at_scheduler_timestamp"] + \
+                            dropped_tasks["dropped_at_task_id"].map(lambda tid: self.slo_log[w][tid]))
+                            .all())
+                    
+                # completed tasks were never started after their task deadlines
+                complete_tasks = self.task_log.replace("", np.nan)
+                complete_tasks = complete_tasks[complete_tasks["dropped_timestamp"]==np.nan]
+                for w in set(complete_tasks["workflow_id"]):
+                    assert(complete_tasks["execution_start_timestamp"] <= 
+                           complete_tasks["arrival_at_scheduler_timestamp"] + 
+                           complete_tasks["task_id"].map(lambda tid: self.slo_log[w][tid]))
+            
+            elif self.gcfg.SLO_TYPE == "JOB_LEVEL":
+                for _, row in dropped_jobs.iterrows():
+                    # dropped jobs all dropped after deadline
+                    assert(row["create_time"] + row["response_time"] >= row["deadline"])
+
+                    # logged deadline == client SLO + job create time
+                    slo = self.client_log[(self.client_log["client_id"]==row["client_id"]) & 
+                                          (self.client_log["workflow_id"]==row["workflow_id"])]["slo"].iloc[0]
                     assert(row["deadline"] == row["create_time"] + slo)
 
+            # dropped jobs are never batched after being dropped
+            for _, row in dropped_jobs.iterrows():
                 mask = (self.batch_log["batched_job_task_ids"].str.contains(f"\({row['job_id']},")) &\
                         (self.batch_log["execution_start_timestamp"] >= row["create_time"] + row["response_time"])
                 assert(self.batch_log[mask].empty)
 
-        print("[PASS] Job drop verification (job-level SLO)")
+        print("[PASS] Job drop verification")
 
 
     def verify_instance_activity(self):
@@ -75,7 +165,7 @@ class LogVerifier:
             assert(len(self.batch_log[mask]) <= 1)
             assert(row["is_active"] == (not self.batch_log[mask].empty))
 
-        print("Successfully verified is_active!")
+        print("[PASS] Work log activity column verification")
 
 
     def verify_remaining_work(self):
@@ -231,6 +321,11 @@ if __name__ == "__main__":
         spec.loader.exec_module(module)
         modules[path] = module
 
+    slo_log = None
+    if os.path.exists(os.path.join(results_dir, "sim_logs/nexus_task_slo_log.json")):
+        slo_log = json.load(open(os.path.join(results_dir, "sim_logs/nexus_task_slo_log.json")))
+        slo_log = {int(k1): {int(k2): v2 for k2, v2 in v1.items()} for k1, v1 in slo_log.items()}
+
     exec_verifier = LogVerifier(
         pd.read_csv(os.path.join(results_dir, "sim_logs/job_log.csv")),
         pd.read_csv(os.path.join(results_dir, "sim_logs/task_log.csv")),
@@ -238,6 +333,7 @@ if __name__ == "__main__":
         pd.read_csv(os.path.join(results_dir, "sim_logs/worker_config_log.csv")),
         pd.read_csv(os.path.join(results_dir, "sim_logs/work_log.csv")),
         pd.read_csv(os.path.join(results_dir, "sim_logs/client_config_log.csv")),
+        slo_log,
         is_centralized,
         modules[gcfg_path],
         modules[mcfg_path],

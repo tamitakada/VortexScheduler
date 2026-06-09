@@ -4,6 +4,8 @@ import argparse
 import shutil
 import numpy as np
 
+import core.configs.gen_config as gcfg
+
 # from schedulers.algo.inferline_planner_algo import Inferline
 from simulations.simulation import Simulation
 
@@ -12,6 +14,10 @@ sys.dont_write_bytecode = True
 np.random.seed(42)
 
 def run_experiment(is_centralized: bool, out_path: str):
+    # prevent illegal configs
+    assert((not gcfg.DISPATCH_POLICY == "SHEPHERD") or is_centralized) # SHEP only runs central
+    assert((not gcfg.DROP_POLICY == "NEXUS") or is_centralized) # NEXUS only runs central
+
     # copy exp configs
     shutil.copytree(
         os.path.join(os.environ.get("SIMULATION_DIR"), "core", "configs"), 

@@ -50,7 +50,7 @@ class Client(EventListener):
             print(f"Remaining jobs for client {self.id}: {len(self.jobs.keys()) - len([v for v in self.jobs.values() if v[2]])}")
         
         elif event.type.id == EventIds.JOBS_DROPPED:
-            for job_id in event.kwargs["job_ids"]:
+            for job_id, task_id in event.kwargs["job_task_ids"]:
                 if job_id in self.jobs:
                     # should not have logged before
                     # assert(self.jobs[job_id][1] == -1)

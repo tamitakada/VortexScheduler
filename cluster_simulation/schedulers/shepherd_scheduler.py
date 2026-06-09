@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 import core.configs.gen_config as gcfg
 
@@ -8,11 +9,14 @@ from core.job import Job
 from core.task import Task
 from core.model import Model
 from core.data_models.workflow import Workflow
+from core.allocation import ModelAllocation
 
 from workers.worker import Worker
 from workers.gpu_state import ModelState
 
 from schedulers.scheduler import Scheduler
+from schedulers.algo.nexus_algo import NexusSLOSplitter
+
 from queue_management.queued_task import QueuedTask
 from queue_management.batching import TaskBatcher
 
@@ -23,8 +27,9 @@ from events.event_types import *
 
 class ShepherdScheduler(Scheduler):
 
-    def __init__(self, em: EventManager, workers: dict[UUID, Worker], workflows: list[Workflow], scheduler_worker_id: UUID):
-        super().__init__(em)
+    def __init__(self, em: EventManager, allocation: ModelAllocation, workers: dict[UUID, Worker], 
+                 workflows: list[Workflow], scheduler_worker_id: UUID):
+        super().__init__(em, allocation)
 
         self.workers = workers
         self.workflows = workflows
@@ -33,8 +38,9 @@ class ShepherdScheduler(Scheduler):
         # (worker ID, instance ID) -> list[(job ID, task ID)] to record scheduling decisions
         self.scheduled_batch_to_instance: dict[tuple[UUID, UUID], list[tuple[int, int]]] = {}
 
-        # job ID -> Job instance
-        self.arrived_jobs: dict[int, Job] = {}
+        self.arrived_jobs: dict[int, Job] = {} # job ID -> Job instance
+        self.arrived_tasks: pd.DataFrame = pd.DataFrame(columns=["time", "model_id"])
+        self.dropped_jobs: set[int] = set()
 
         # model ID -> model queue
         self.queues: dict[int, PriorityQueue] = {}
@@ -44,6 +50,36 @@ class ShepherdScheduler(Scheduler):
 
         # for round robin dispatch: model ID -> (worker ID, instance ID)
         self.last_sent_tasks_to: dict[int, tuple[UUID, UUID]] = {}
+
+        # Nexus task-level SLOs: workflow ID -> task ID -> (task level SLO, max batch size)
+        self.workflow_task_slos: dict[int, dict[int, tuple[float, int]]] = {}
+
+
+    def _set_nexus_task_level_slo(self, time: float, tasks: list[Task]):
+        if gcfg.SLO_TYPE != "NEXUS": # not using nexus SLO splitter
+            return
+        
+        if time < 1000: # not enough time to judge arrival rate
+            return
+
+        for task in tasks:
+            if task.job.job_type_id not in self.workflow_task_slos:
+                per_model_ar = {}
+                for mid in set(self.arrived_tasks["model_id"]):
+                    per_model_ar[mid] = self.arrived_tasks[(self.arrived_tasks["model_id"]==mid) & \
+                                                           (self.arrived_tasks["time"] >= (time - 1000))].count().iloc[0] / \
+                                        self.allocation.count(mid)
+
+                slo_split = NexusSLOSplitter.generate_task_slos(
+                    time, per_model_ar, self.workflows[task.job.job_type_id], task.job.slo)
+                
+                if not slo_split:
+                    continue
+
+                self.workflow_task_slos[task.job.job_type_id] = slo_split
+
+            task.slo = self.workflow_task_slos[task.job.job_type_id][task.task_id][0]
+            task.max_batch_size = self.workflow_task_slos[task.job.job_type_id][task.task_id][1]                
 
 
     def check_dropped_tasks(self, time: float):
@@ -56,13 +92,17 @@ class ShepherdScheduler(Scheduler):
             return
         
         elif gcfg.DROP_POLICY == "LAZY":
-            dropped = []
+            dropped: dict[int, Task] = {}
             for q in self.queues.values():
                 filtered = []
                 while q.qsize() > 0:
                     qt = q.get()
-                    if time >= qt.task.get_task_deadline():
-                        dropped.append(qt.task)
+                    if qt.task.job.id in self.dropped_jobs:
+                        continue
+                    elif time >= qt.task.get_task_deadline():
+                        if qt.task.job.id not in dropped or \
+                            qt.task.get_task_deadline() < dropped[qt.task.job.id].get_task_deadline():
+                            dropped[qt.task.job.id] = qt.task
                     else:
                         filtered.append(qt)
 
@@ -70,9 +110,13 @@ class ShepherdScheduler(Scheduler):
                     q.put(qt)
 
             if dropped:
+                job_task_ids = [(jid, t.task_id) for jid, t in dropped.items()]
+                for jid in dropped.keys():
+                    self.dropped_jobs.add(jid)
+
                 self.em.add_event(Event(time,
                                         EVENT_TYPES[EventIds.JOBS_DROPPED],
-                                        kwargs={"job_ids": set(t.job.id for t in dropped)}), self.emitter_id) 
+                                        kwargs={"job_task_ids": job_task_ids}), self.emitter_id) 
 
 
     def on_job_arrival(self, time: float, job: Job):
@@ -83,6 +127,13 @@ class ShepherdScheduler(Scheduler):
 
     def on_tasks_arrival(self, time: float, tasks: list[Task]):
         self.check_dropped_tasks(time)
+        
+        # update task arrival data
+        for task in tasks:
+            self.arrived_tasks.loc[len(self.arrived_tasks)] = (time, task.model_data.id)
+            task.arrival_time = time
+
+        self._set_nexus_task_level_slo(time, tasks)
 
         model_ids_to_check = set()
         for task in tasks:
@@ -104,11 +155,9 @@ class ShepherdScheduler(Scheduler):
             for (worker, instance_state) in relevant_instances:
                 self._schedule_instance_if_idle(time, worker.id, instance_state.model.id,
                                                 not gcfg.ENABLE_NETWORKING_DELAYS)
-                
-
     
 
-    def on_jobs_dropped(self, time: float, job_ids: list[int]):
+    def on_jobs_dropped(self, time: float, job_task_ids: list[tuple[int, int]]):
         pass
     
 
@@ -142,7 +191,8 @@ class ShepherdScheduler(Scheduler):
             self.scheduled_batch_to_instance[(worker.id, instance_state.model.id)] == None:
             
             queued_batch = TaskBatcher.get_batch(
-                time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True)
+                time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True,
+                self.queues[instance_state.model.data.id].queue[0].task.max_batch_size)
 
             # skip if cannot form batch
             if not queued_batch: return
@@ -197,7 +247,8 @@ class ShepherdScheduler(Scheduler):
         elif gcfg.ENABLE_PREEMPTION:
             curr_batch = self.scheduled_batch_to_instance[(worker.id, instance_state.model.id)]
             queued_batch = TaskBatcher.get_batch(
-                time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True)
+                time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True,
+                curr_batch.tasks[0].max_batch_size)
             
             if queued_batch.size() >= gcfg.FLEX_LAMBDA * len(curr_batch):
                 assert(False)

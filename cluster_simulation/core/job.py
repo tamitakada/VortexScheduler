@@ -9,8 +9,9 @@ class Job(object):
         self.client_id: int = client_id
         self.id: int = job_id
         self.job_type_id: int = workflow.id
-
         self.workflow: Workflow = workflow
+        self.create_time = created_at
+        self.slo: float = slo
 
         self.tasks: list[Task] = []
         for _, at in sorted(self.workflow.tasks.items(), key=lambda item: item[0]):
@@ -19,8 +20,6 @@ class Job(object):
         # task ID -> completion time, -1 for not complete
         self._task_states: dict[Task, float] = {tid: -1 for tid in workflow.tasks.keys()}
         
-        self.create_time = created_at
-        self.slo: float = slo
 
     def __hash__(self):
         return hash(self.id)

@@ -7,7 +7,7 @@ class Task(object):
     def __init__(self, job, task_id: int, model_data: ModelData | None, 
                  input_size: float, result_size: float,
                  max_wait_time: float, max_emit_batch_size: int, 
-                 slo: float | None=None):
+                 slo: float | None=None, max_batch_size: int=0):
 
         self.job = job
         self.task_id = task_id
@@ -17,6 +17,8 @@ class Task(object):
         self.max_wait_time = max_wait_time
         self.max_emit_batch_size = max_emit_batch_size
         self.slo = slo
+        self.arrival_time = -1
+        self.max_batch_size = max_batch_size
         
         # list of Tasks (inputs) that this task requires ( list will be appended as the job generated)
         self.required_task_ids = []                        # list of task ids
@@ -27,10 +29,12 @@ class Task(object):
 
     def get_task_deadline(self):
         if gcfg.SLO_TYPE == "NEXUS":
-            assert(self.deadline != None)
-            return self.deadline
-        else:
+            arrival_time = self.arrival_time if self.arrival_time >= 0 else self.job.create_time
+            return arrival_time + self.slo * (1 + gcfg.SLO_SLACK)
+        elif gcfg.SLO_TYPE == "JOB_LEVEL":
             return self.job.create_time + self.job.slo * (1 + gcfg.SLO_SLACK)
+        else:
+            assert(f"Unknown SLO_TYPE {gcfg.SLO_TYPE}")
 
     def __hash__(self):
         return hash((self.task_id, self.job.id))

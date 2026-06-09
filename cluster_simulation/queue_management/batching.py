@@ -1,5 +1,6 @@
 import core.configs.gen_config as gcfg
 
+from core.network import *
 from core.task import Task
 from core.batch import Batch
 
@@ -9,7 +10,8 @@ from queue import PriorityQueue
 class TaskBatcher:
 
     @classmethod
-    def get_batch(cls, time: float, partition_size: int, task_queue: PriorityQueue, update_queue: bool) -> Batch:
+    def get_batch(cls, time: float, partition_size: int, task_queue: PriorityQueue, update_queue: bool,
+                  max_batch_size: int) -> Batch:
         """Form a batch according to the configured batching policy.
 
         Args:
@@ -17,6 +19,7 @@ class TaskBatcher:
             partition_size: Worker total memory size
             task_queue: Queue from which to form batch
             update_queue: If True, dequeues all elements in batch
+            max_batch_size: Max batch size
         """
 
         qt_list = []
@@ -24,10 +27,11 @@ class TaskBatcher:
         task_list = [qt.task for qt in qt_list]
 
         if gcfg.BATCH_POLICY == "LARGEST":
-            batch = cls._get_largest_batch(task_list)
+            batch = cls._get_largest_batch(task_list, max_batch_size)
         elif gcfg.BATCH_POLICY == "LARGEST_FEASIBLE":
             assert(gcfg.BOOST_POLICY == "EDF")
-            batch = cls._get_optimal_batch(time, partition_size, task_list, False)
+            batch = cls._get_optimal_batch(time, partition_size, task_list, False, max_batch_size)
+            print("OPT: ", batch)
         else:
             raise RuntimeError("Unknown batch policy ", gcfg.BATCH_POLICY)
         
@@ -46,7 +50,7 @@ class TaskBatcher:
 
                     if gcfg.BATCH_POLICY == "LARGEST":
                         assert(all([t.job.create_time >= latest_create_time for t in nonbatched_tasks]))
-                    elif gcfg.BATCH_POLICY == "OPTIMAL":
+                    elif gcfg.BATCH_POLICY == "LARGEST_FEASIBLE":
                         assert(all([t.job.create_time >= latest_create_time or \
                                     t.deadline < time + t.model.data.batch_exec_times[partition_size][batch.size()] 
                                     for t in nonbatched_tasks]))
@@ -60,9 +64,9 @@ class TaskBatcher:
 
                     if gcfg.BATCH_POLICY == "LARGEST":
                         assert(all([t.get_task_deadline() >= latest_deadline for t in nonbatched_tasks]))
-                    elif gcfg.BATCH_POLICY in ["OPTIMAL", "OPT_PREEMPT"]:
+                    elif gcfg.BATCH_POLICY == "LARGEST_FEASIBLE":
                         assert(all([t.get_task_deadline() >= latest_deadline or \
-                                    t.get_task_deadline() < time + t.model_data.batch_exec_times[partition_size][batch.size()] 
+                                    t.get_task_deadline() < time + t.model_data.batch_exec_times[partition_size][batch.size()] + CPU_to_CPU_delay(sum(t.input_size for t in batch.tasks)) 
                                     for t in nonbatched_tasks]))
 
         if not batch and gcfg.BATCH_POLICY != "LARGEST" and gcfg.FALLBACK_TO_LARGEST_BATCH:
@@ -93,14 +97,14 @@ class TaskBatcher:
 
 
     @classmethod
-    def _get_largest_batch(cls, task_queue: list[Task]) -> Batch | None:
+    def _get_largest_batch(cls, task_queue: list[Task], max_batch_size: int) -> Batch | None:
         """Returns largest batch <= task max batch size drawn from [task_queue]
         in FIFO order.
         """
         tasks = []
         for task in task_queue:
             tasks.append(task)
-            if len(tasks) >= task.model_data.max_batch_size:
+            if len(tasks) >= max_batch_size:
                 break
 
         if len(tasks) == 0:
@@ -110,7 +114,8 @@ class TaskBatcher:
 
 
     @classmethod
-    def _get_optimal_batch(cls, time: float, partition_size: int, task_queue: list[Task], preserve_order: bool) -> Batch | None:
+    def _get_optimal_batch(cls, time: float, partition_size: int, task_queue: list[Task], 
+                           preserve_order: bool, max_batch_size: int) -> Batch | None:
         """Returns largest batch drawn from [task_queue] s.t. no task
         deadline in the batch is violated.
         """
@@ -121,16 +126,18 @@ class TaskBatcher:
         else:
             task_queue = sorted(task_queue, key=lambda t: t.get_task_deadline())
 
-        max_bsize = task_queue[0].model_data.max_batch_size
+        max_bsize = max_batch_size
 
         # if no valid batch possible, return None
-        if all((time + task.model_data.batch_exec_times[partition_size][1] > task.get_task_deadline())
+        if all((time + task.model_data.batch_exec_times[partition_size][1] + CPU_to_CPU_delay(task.input_size) > \
+                task.get_task_deadline())
             for task in task_queue):
             return None
 
         if max_bsize == 1:
             for task in task_queue: 
-                if time + task.model_data.batch_exec_times[partition_size][1] <= task.get_task_deadline():
+                if time + task.model_data.batch_exec_times[partition_size][1] + CPU_to_CPU_delay(task.input_size) \
+                    <= task.get_task_deadline():
                     return Batch([task])
             return None
 
@@ -140,7 +147,8 @@ class TaskBatcher:
         for i in range(len(task_queue) - 1, -1, -1):
             task = task_queue[i]
             for j in range(1, max_bsize+1):
-                if time + task.model_data.batch_exec_times[partition_size][j] > task.get_task_deadline():
+                if time + task.model_data.batch_exec_times[partition_size][j] + CPU_to_CPU_delay(task.input_size * j) > \
+                    task.get_task_deadline():
                     # on SLO violation, task [i] cannot be incl. in batch of size [j]
                     bsizes[i][j] = 0
                 elif i == (len(task_queue)-1): # if on last task and no SLO violation, always 1
@@ -163,14 +171,15 @@ class TaskBatcher:
 
         # batched tasks should not violate deadline
         if len(tasks) > 0:
-            proposed_exec_time = task_queue[0].model_data.batch_exec_times[partition_size][len(tasks)]
+            proposed_exec_time = task_queue[0].model_data.batch_exec_times[partition_size][len(tasks)] + CPU_to_CPU_delay(sum(t.input_size for t in tasks))
             assert(all(t.get_task_deadline() >= time + proposed_exec_time for t in tasks))
 
         if len(tasks) < max_bsize and len(task_queue) > len(tasks):
             if len(tasks) == 0:
                 # if no valid batch found, all queued tasks should violate
                 # slo even with min batch size (=1)
-                assert(all(t.get_task_deadline() < time + task_queue[0].model_data.batch_exec_times[partition_size][1] for t in task_queue))
+                assert(all(t.get_task_deadline() < time + task_queue[0].model_data.batch_exec_times[partition_size][1] + CPU_to_CPU_delay(t.input_size) 
+                           for t in task_queue))
             else:
                 # if batch size < max batch size and unbatched tasks exist,
                 # then any larger batch must cause an SLO violation for some
@@ -179,7 +188,7 @@ class TaskBatcher:
                 edf_sorted = sorted(task_queue, key=lambda t: t.get_task_deadline())
                 min_larger_size = len(tasks) + 1
                 larger_candidate_batch = edf_sorted[(len(edf_sorted)-min_larger_size):]
-                larger_candidate_exec = task_queue[0].model_data.batch_exec_times[partition_size][min_larger_size]
+                larger_candidate_exec = task_queue[0].model_data.batch_exec_times[partition_size][min_larger_size] + CPU_to_CPU_delay(task_queue[0].input_size * min_larger_size)
 
                 assert(any(t.get_task_deadline() < time + larger_candidate_exec 
                         for t in larger_candidate_batch))

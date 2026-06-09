@@ -62,6 +62,8 @@ class Worker(EventListener):
         self.awaiting_batch_to_tasks: dict[UUID, list[Task]] = {}   # instance ID -> assigned batch
         self.awaiting_task_to_batch: dict[Task, UUID] = {}          # waiting task -> assigned instance ID
 
+        self.dropped_jobs: set[int] = set()
+
 
     def on_event(self, event: Event):
         if event.type.id == EventIds.TASKS_ASSIGNED_TO_WORKER:
@@ -96,7 +98,7 @@ class Worker(EventListener):
             self.on_outputs_arrival(event.time, event.kwargs["tasks"])
         
         elif event.type.id == EventIds.JOBS_DROPPED:
-            self._drop_tasks(event.kwargs["job_ids"])
+            self._drop_tasks(event.kwargs["job_task_ids"])
 
         elif event.type.id == EventIds.CHECK_QUEUE_AT_WORKER:
             if event.kwargs["worker_id"] != self.id:
@@ -228,10 +230,14 @@ class Worker(EventListener):
             self.on_tasks_ready(time, ready_tasks_for_worker_queue)
 
 
-    def _drop_tasks(self, job_ids: list[int]):
+    def _drop_tasks(self, job_task_ids: list[tuple[int, int]]):
         """Remove all tasks associated with given jobs from queues. Does not
         affect executing batches.
         """
+        job_ids = [jid for (jid, _) in job_task_ids]
+        for job_id in job_ids:
+            self.dropped_jobs.add(job_id)
+
         for q in self.queues.values():
             filtered = []
             while q.qsize() > 0:
@@ -247,16 +253,28 @@ class Worker(EventListener):
             return
         
         elif gcfg.DROP_POLICY == "LAZY":
-            dropped = []
+            dropped: dict[int, Task] = {}
             for q in self.queues.values():
-                for qt in q.queue:
-                    if time >= qt.task.get_task_deadline():
-                        dropped.append(qt.task)
+                filtered = []
+                while q.qsize() > 0:
+                    qt = q.get()
+                    if qt.task.job.id in self.dropped_jobs:
+                        continue
+                    elif time >= qt.task.get_task_deadline():
+                        if qt.task.job.id not in dropped or \
+                            qt.task.get_task_deadline() < dropped[qt.task.job.id].get_task_deadline():
+                            dropped[qt.task.job.id] = qt.task
+                    else:
+                        filtered.append(qt)
+
+                for qt in filtered:
+                    q.put(qt)
 
             if dropped:
+                job_task_ids = [(jid, t.task_id) for jid, t in dropped.items()]
                 self.em.add_event(Event(time,
                                         EVENT_TYPES[EventIds.JOBS_DROPPED],
-                                        kwargs={"job_ids": set(t.job.id for t in dropped)}), self.emitter_id)    
+                                        kwargs={"job_task_ids": job_task_ids}), self.emitter_id)    
 
 
     def on_check_queue(self, time: float, model_id: int):
@@ -271,7 +289,8 @@ class Worker(EventListener):
             batch = TaskBatcher.get_batch(time, 
                                             self.total_memory_gb, 
                                             self.queues[model_id],
-                                            True)
+                                            True,
+                                            self.queues[model_id].queue[0].task.model_data.max_batch_size)
             
             if not batch: break
 
