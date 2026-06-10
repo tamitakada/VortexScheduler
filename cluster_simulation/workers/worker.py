@@ -41,6 +41,7 @@ class Worker(EventListener):
             EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
             EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
             EVENT_TYPES[EventIds.JOBS_DROPPED],
+            EVENT_TYPES[EventIds.BATCH_PREEMPTION_AT_WORKER]
         })
 
         self.emitter_id = self.em.register_emitter(Agent.WORKER, {
@@ -118,6 +119,12 @@ class Worker(EventListener):
             
             self.on_batch_finish(event.time, event.kwargs["batch"], event.kwargs["model_instance_id"])
 
+        elif event.type.id == EventIds.BATCH_PREEMPTION_AT_WORKER:
+            if event.kwargs["worker_id"] != self.id:
+                return
+            
+            self.on_batch_preemption(event.time, event.kwargs["replacement_batch"], event.kwargs["model_instance_id"])
+
         else:
             raise ValueError(f"Worker received unregistered event: {event}")
         
@@ -133,6 +140,27 @@ class Worker(EventListener):
             for task in tasks:
                 self.awaiting_task_to_batch[task] = forced_instance_id
 
+    
+    def on_batch_preemption(self, time: float, tasks: list[Task], instance_id: UUID):
+        # upon receiving the preemption request, immediately halt execution on
+        # preempted batch
+        found_batch = False
+        for s in self.GPU_state.state_at(time):
+            if s.model.id == instance_id:
+                if s.reserved_batch:
+                    self.GPU_state.release_busy_model(s.reserved_batch.id, time)
+                
+                assert(self.is_centralized)
+                self.em.add_event(Event(time, 
+                                        EVENT_TYPES[EventIds.TASKS_ARRIVAL_AT_SCHEDULER],
+                                        kwargs={"tasks": s.reserved_batch.tasks}), self.emitter_id)
+
+                found_batch = True
+                break
+        assert(found_batch)
+
+        self.on_tasks_assigned(tasks, instance_id)
+
 
     def on_batch_ready(self, time: float, tasks: list[Task], instance_id: UUID):
         """If scheduler assigned a pre-formed batch to this worker, and all the 
@@ -142,10 +170,30 @@ class Worker(EventListener):
         state = self.GPU_state.get_instance_state(instance_id, time)
         assert(state.reserved_batch == None)
 
+        filtered = tasks
+        if gcfg.DROP_POLICY == "LAZY":
+            dropped = []
+            filtered = []
+            for task in tasks:
+                if task.job.id in self.dropped_jobs:
+                    continue
+
+                if time >= task.get_task_deadline():
+                    dropped.append(task)
+                    continue
+
+                filtered.append(task)
+
+            if dropped:
+                self.em.add_event(Event(time, 
+                                        EVENT_TYPES[EventIds.JOBS_DROPPED], 
+                                        kwargs={"job_task_ids": [(t.job.id, t.task_id) for t in filtered]}),
+                                  self.emitter_id)
+
         self.em.add_event(
             Event(time, 
                   EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
-                  kwargs={"batch": Batch(tasks), 
+                  kwargs={"batch": Batch(filtered), 
                           "model_instance_id": instance_id, 
                           "worker_id": self.id}),
             self.emitter_id)
@@ -202,7 +250,8 @@ class Worker(EventListener):
         """
         ready_tasks_for_worker_queue = []
         for task in tasks:
-            assert((task.job.id, task.task_id) in self.awaiting_dep_to_task)
+            if (task.job.id, task.task_id) not in self.awaiting_dep_to_task:
+                continue
 
             waiting_task = self.awaiting_dep_to_task[(task.job.id, task.task_id)]
             self.awaiting_task_to_deps[waiting_task].remove(task.task_id)
