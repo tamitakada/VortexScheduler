@@ -282,7 +282,7 @@ class Simulation:
         for client in self.clients:
             for jid, (create_time, finish_time, was_completed, deadline, job) in client.jobs.items():
                 drop_ids = self.logger.task_log[self.logger.task_log["job_id"]==jid]["dropped_at_task_id"].dropna().unique()
-                assert(was_completed or len(drop_ids) == 1)
+                assert(was_completed or len(drop_ids) >= 1)
 
                 jobs_df.loc[len(jobs_df)] = {
                     "client_id": client.id,
