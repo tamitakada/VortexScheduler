@@ -248,7 +248,7 @@ class ShepherdScheduler(Scheduler):
             curr_batch = self.scheduled_batch_to_instance[(worker.id, instance_state.model.id)]
             queued_batch = TaskBatcher.get_batch(
                 time, worker.total_memory_gb, self.queues[instance_state.model.data.id], True,
-                curr_batch.tasks[0].max_batch_size)
+                instance_state.model.data.max_batch_size)
             
             if queued_batch.size() >= gcfg.FLEX_LAMBDA * len(curr_batch):
                 assert(False)
