@@ -205,9 +205,10 @@ class Simulation:
         self.logger.worker_log.to_csv(os.path.join(self.out_path, "worker_batch_log.csv"))
         self.logger.work_log.to_csv(os.path.join(self.out_path, "work_log.csv"))
 
-        with open(os.path.join(self.out_path, "nexus_task_slo_log.json"), "w") as f:
-            f.write(json.dumps({k1: {k2: v2[0] for k2, v2 in v1.items()} 
-                                for k1, v1 in self.scheduler.workflow_task_slos.items()}))
+        if gcfg.SLO_TYPE == "NEXUS":
+            with open(os.path.join(self.out_path, "nexus_task_slo_log.json"), "w") as f:
+                f.write(json.dumps({k1: {k2: v2[0] for k2, v2 in v1.items()} 
+                                    for k1, v1 in self.scheduler.workflow_task_slos.items()}))
 
         self._get_client_data()
         self._postprocess_idle_times()
