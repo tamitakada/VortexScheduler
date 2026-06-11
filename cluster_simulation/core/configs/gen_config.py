@@ -24,28 +24,15 @@ MAX_NUM_MODELS_PER_NODE = 4
 """  --------       Workload Parameters    --------  """
 
 CLIENT_CONFIGS = [ # in ms
-    {6: {"SEND_RATES": [40],
+    {6: {"SEND_RATES": [28],
          "JOBS_PER_SEND_RATE": [1000], 
-         "SLO": int(62.48 * 0)}},
-    {7: {"SEND_RATES": [40],
+         "SLO": int(62.48 * 2.5)}},
+    {7: {"SEND_RATES": [28],
          "JOBS_PER_SEND_RATE": [1000], 
-         "SLO": int(70.48 * 0)}},
-    {8: {"SEND_RATES": [40],
+         "SLO": int(70.48 * 2.5)}},
+    {8: {"SEND_RATES": [28],
          "JOBS_PER_SEND_RATE": [1000], 
-         "SLO": int(80.48 * 0)}},
-
-    # {1: {"NUM_JOBS": 5000,
-    #      "SEND_RATES": [8],#[12],
-    #      "SEND_RATE_CHANGE_INTERVALS": [], 
-    #      "SLO": int(256.3*2)}},
-    # {4: {"NUM_JOBS": 5000,
-    #      "SEND_RATES": [8],#[12],
-    #      "SEND_RATE_CHANGE_INTERVALS": [], 
-    #      "SLO": int(787.2*2)}},
-    # {5: {"NUM_JOBS": 5000,
-    #      "SEND_RATES": [8],#[12],
-    #      "SEND_RATE_CHANGE_INTERVALS": [], 
-    #      "SLO": int(388.7*2)}},
+         "SLO": int(80.48 * 2.5)}},
 ]
 
 WORKLOAD_DISTRIBUTION = "POISSON"  # CONSTANT | POISSON | GAMMA
@@ -64,7 +51,7 @@ RESCHEDULE_THREASHOLD = 1.5
 FLEX_LAMBDA = 3.03
 HERD_K = 1.5
 HERD_PERIODICITY = 12000    # run HERD every [HERD_PERIODICITY] ms
-ENABLE_PREEMPTION = True
+ENABLE_PREEMPTION = False
 
 
 """  -------        Boost Parameters  --------- """
@@ -72,7 +59,7 @@ ENABLE_PREEMPTION = True
 BOOST_PARAMETER = 0.00293596042 # 0.00104567474
 
 # JOB_SIZE | REMAINING_JOB_TIME | FCFS | EDF
-BOOST_POLICY = "FCFS"
+BOOST_POLICY = "EDF"
 
 """ -------         Inferline Parameters  -------- """
 
@@ -89,16 +76,22 @@ ENABLE_ESTIMATOR_LOGGING = False
 """  -------        General Scheduling Parameters  --------- """
 
 # ROUND_ROBIN | SHEPHERD (central only) | HEFT (decentral only)
-DISPATCH_POLICY = "SHEPHERD"
+DISPATCH_POLICY = "ROUND_ROBIN"
 ENABLE_PIPELINING = False
-ENABLE_NETWORKING_DELAYS = False
+ENABLE_NETWORKING_DELAYS = True
 
 # LARGEST | LARGEST_FEASIBLE (largest non-SLO violating batch)
 BATCH_POLICY = "LARGEST"
 FALLBACK_TO_LARGEST_BATCH = False
 
-# OPTIMAL | LATEST_POSSIBLE | CLUSTER_ADMISSION_LIMIT | NONE
+# LAZY | NONE
 DROP_POLICY = "NONE"
+ADMISSION_CONTROL_POLICY = "FLAT" # NONE | FLAT
+ADMISSION_CONTROL_DROP_RATE = { # workflow ID -> P(drop on job arrival) IF policy == FLAT
+    6: 0.2,
+    7: 0.3,
+    8: 0.25
+} 
 
 SLO_SLACK = 0
 SLO_TYPE = "JOB_LEVEL" # JOB_LEVEL | NEXUS
@@ -114,7 +107,7 @@ ALLOCATION_STRATEGY = "CUSTOM" #"INFERLINE"
 # [(partition size in GB, [model ids])]
 CUSTOM_ALLOCATION = [
     (24, [1]), (24, [1]), (24, [1]), (6, [3]), (6, [3]), (6, [3]), (6, [0, 2]),
-    (6, [14]), (6, [15]), (6, [16]), (6, [])
+    (6, [14]), (6, [15]), (6, [16])
 ]
 
 # 12-node mutlitenant ppl 2 (3 versions) alloc

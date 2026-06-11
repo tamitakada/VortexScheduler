@@ -20,6 +20,10 @@ class EventManager:
         self._event_emitters: dict[int, list[UUID]] = {}
         self._event_listeners: dict[int, list[UUID]] = {}
 
+        # when batches are preempted, BATCH_FINISH events enqueued previously
+        # should be discarded
+        self.discarded_batches: dict[UUID, list[tuple[int, int]]] = {}
+
         if gcfg.PRODUCE_EVENT_LOG:
             self.event_log = pd.DataFrame(columns=["time", "event"])
 
@@ -71,6 +75,9 @@ class EventManager:
         """
         assert(emitter_id in self._event_emitters[event.type.id])
 
+        if event.type.id == EventIds.BATCH_PREEMPTION_AT_WORKER:
+            self.discarded_batches[event.kwargs["model_instance_id"]] = event.kwargs["preempted_tasks"]
+
         for queued_event in self._event_queue.queue:
             if queued_event.type.id == event.type.id and \
                 queued_event.time == event.time and \
@@ -99,6 +106,16 @@ class EventManager:
 
         event: Event = self._event_queue.get()
         assert(event.time >= self._prev_time)
+
+        # do NOT update EM state if batch was preempted (outdated event)
+        if event.type.id == EventIds.BATCH_FINISHED_AT_WORKER and \
+            event.kwargs["model_instance_id"] in self.discarded_batches and \
+            sorted([(t.job.id, t.task_id) for t in event.kwargs["batch"].tasks]) == \
+            sorted(self.discarded_batches[event.kwargs["model_instance_id"]]):
+            
+            # clear state & skip event
+            self.discarded_batches.pop(event.kwargs["model_instance_id"])
+            return
 
         if gcfg.PRODUCE_EVENT_LOG:
             self.event_log.loc[len(self.event_log)] = [event.time, str(event)]

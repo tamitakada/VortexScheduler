@@ -70,6 +70,7 @@ class LiveVerifier(EventListener):
 
             EVENT_TYPES[EventIds.JOBS_DROPPED],
 
+            EVENT_TYPES[EventIds.BATCH_PREEMPTION_AT_WORKER],
             EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
             EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
             EVENT_TYPES[EventIds.RESPONSE_SENT_TO_CLIENT],
@@ -197,6 +198,16 @@ class LiveVerifier(EventListener):
                 self.total_samples += 1
 
                 self.task_log[(t.job.id, t.task_id)]["exec_end_time"] = event.time
+            
+            self.instance_states[event.kwargs["model_instance_id"]] = None
+
+        elif event.type.id == EventIds.BATCH_PREEMPTION_AT_WORKER:
+            # instance is NOT currently idle
+            assert(self.instance_states[event.kwargs["model_instance_id"]] != None)
+            
+            # replacement batch is >> curr batch
+            assert(len(event.kwargs["replacement_batch"]) >= 
+                   gcfg.FLEX_LAMBDA * len(self.instance_states[event.kwargs["model_instance_id"]]))
             
             self.instance_states[event.kwargs["model_instance_id"]] = None
 

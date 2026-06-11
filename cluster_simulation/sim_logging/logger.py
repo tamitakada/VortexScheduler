@@ -36,6 +36,7 @@ class Logger(EventListener):
             EVENT_TYPES[EventIds.JOBS_DROPPED],
             EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
             EVENT_TYPES[EventIds.BATCH_FINISHED_AT_WORKER],
+            EVENT_TYPES[EventIds.BATCH_PREEMPTION_AT_WORKER],
             EVENT_TYPES[EventIds.RESPONSE_SENT_TO_CLIENT],
             EVENT_TYPES[EventIds.RESPONSE_RECEIVED_AT_CLIENT]
         })
@@ -236,6 +237,21 @@ class Logger(EventListener):
                                   (self.task_log["task_id"]==task.task_id), "execution_end_timestamp"] = event.time
 
             self.worker_log.loc[self.worker_log["batch_id"]==batch.id, "execution_end_timestamp"] = event.time
+
+        elif event.type.id == EventIds.BATCH_PREEMPTION_AT_WORKER:
+            tasks: list[Task] = event.kwargs["replacement_batch"]
+
+            mask = (self.worker_log["instance_id"]==event.kwargs["model_instance_id"]) & \
+                    (self.worker_log["execution_start_timestamp"] <= event.time) & \
+                    (self.worker_log["execution_end_timestamp"]==np.nan)
+            
+            self.worker_log.loc[mask, "preempted_timestamp"] = event.time
+
+            for task in tasks:
+                for rt in task.required_task_ids:
+                    if (task.job.id, rt) not in self.deps_to_task:
+                        self.deps_to_task[(task.job.id, rt)] = []
+                    self.deps_to_task[(task.job.id, rt)].append(task)
             
         elif event.type.id == EventIds.JOBS_DROPPED:
             for job_id, task_id in event.kwargs["job_task_ids"]:

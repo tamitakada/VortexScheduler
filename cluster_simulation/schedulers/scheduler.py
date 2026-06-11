@@ -1,3 +1,6 @@
+import core.configs.gen_config as gcfg
+import numpy as np
+
 from core.job import Job
 from core.task import Task
 from core.allocation import ModelAllocation
@@ -27,7 +30,8 @@ class Scheduler(EventListener):
             EVENT_TYPES[EventIds.TASKS_ASSIGNED_TO_WORKER],
             EVENT_TYPES[EventIds.TASKS_INPUTS_SENT_TO_WORKER],
             EVENT_TYPES[EventIds.TASKS_OUTPUTS_ASSIGNED_TO_WORKER],
-            EVENT_TYPES[EventIds.JOBS_DROPPED]
+            EVENT_TYPES[EventIds.JOBS_DROPPED],
+            EVENT_TYPES[EventIds.BATCH_PREEMPTION_AT_WORKER]
         })
 
     def on_event(self, event: Event):
@@ -46,8 +50,15 @@ class Scheduler(EventListener):
         else:
             raise ValueError(f"Scheduler received unregistered event: {event}")
 
-    def on_job_arrival(self, time: float, job: Job):
-        raise NotImplementedError()
+    def on_job_arrival(self, time: float, job: Job) -> bool:
+        if gcfg.ADMISSION_CONTROL_POLICY == "FLAT":
+            if job.job_type_id in gcfg.ADMISSION_CONTROL_DROP_RATE:
+                if np.random.binomial(1, gcfg.ADMISSION_CONTROL_DROP_RATE[job.job_type_id], size=1)[0] == 1:
+                    self.em.add_event(Event(time, 
+                                            EVENT_TYPES[EventIds.JOBS_DROPPED],
+                                            kwargs={"job_task_ids": [(job.id, 0)]}), self.emitter_id)
+                    return True
+        return False
     
     def on_tasks_arrival(self, time: float, tasks: list[Task]):
         raise NotImplementedError()

@@ -32,6 +32,9 @@ class CentralRoundRobinScheduler(Scheduler):
 
 
     def on_job_arrival(self, time: float, job: Job):
+        if super().on_job_arrival(time, job):
+            return
+        
         return self.on_tasks_arrival(time, 
                                      [t for t in job.tasks if len(t.required_task_ids) == 0])
     

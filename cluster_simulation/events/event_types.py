@@ -17,11 +17,12 @@ class EventIds:
     task inputs/outputs.
     """
     TASKS_ASSIGNED_TO_WORKER            = 2
-    TASKS_INPUTS_SENT_TO_WORKER         = 3
-    TASKS_INPUTS_ARRIVAL_AT_WORKER      = 4
-    TASKS_OUTPUTS_ASSIGNED_TO_WORKER    = 5
-    TASKS_OUTPUTS_SENT_TO_WORKER        = 6
-    TASKS_OUTPUTS_ARRIVAL_AT_WORKER     = 7
+    BATCH_PREEMPTION_AT_WORKER          = 3
+    TASKS_INPUTS_SENT_TO_WORKER         = 4
+    TASKS_INPUTS_ARRIVAL_AT_WORKER      = 5
+    TASKS_OUTPUTS_ASSIGNED_TO_WORKER    = 6
+    TASKS_OUTPUTS_SENT_TO_WORKER        = 7
+    TASKS_OUTPUTS_ARRIVAL_AT_WORKER     = 8
 
     """
     Events notifying scheduler of available tasks, do NOT carry input.
@@ -148,6 +149,16 @@ EVENT_TYPES: dict[int, EventType] = {
                 "worker_id": True},
         emitter_types=[Agent.WORKER],
         listener_types=[Agent.SCHEDULER, Agent.WORKER, Agent.LOGGER, Agent.VERIFIER]),
+
+    EventIds.BATCH_PREEMPTION_AT_WORKER: EventType(
+        EventIds.BATCH_PREEMPTION_AT_WORKER, "Batch Preemption Requested at Worker",
+        kwargs={"replacement_batch": True,
+                "preempted_tasks": True,
+                "model_instance_id": True,
+                "worker_id": True},
+        emitter_types=[Agent.SCHEDULER],
+        listener_types=[Agent.WORKER, Agent.LOGGER, Agent.VERIFIER]
+    ),
 
 
     EventIds.RESPONSE_SENT_TO_CLIENT: EventType(

@@ -31,7 +31,6 @@ class TaskBatcher:
         elif gcfg.BATCH_POLICY == "LARGEST_FEASIBLE":
             assert(gcfg.BOOST_POLICY == "EDF")
             batch = cls._get_optimal_batch(time, partition_size, task_list, False, max_batch_size)
-            print("OPT: ", batch)
         else:
             raise RuntimeError("Unknown batch policy ", gcfg.BATCH_POLICY)
         

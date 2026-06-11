@@ -112,8 +112,13 @@ class LogVerifier:
         """
 
         if self.gcfg.DROP_POLICY == "NONE":
-            assert(self.job_log[self.job_log["was_completed"]==False].empty)
-        
+            if self.gcfg.ADMISSION_CONTROL_POLICY == "NONE":
+                assert(self.job_log[self.job_log["was_completed"]==False].empty)
+            else:
+                for workflow_id, dr in self.gcfg.ADMISSION_CONTROL_DROP_RATE.items():
+                    workflow_log = self.job_log[self.job_log["workflow_id"]==workflow_id]
+                    real_dr = len(workflow_log[workflow_log["was_completed"]==False]) / len(workflow_log)
+                    assert(abs(real_dr - dr) < 0.1)
         else:
             dropped_jobs = self.job_log[self.job_log["was_completed"]==False]
 
@@ -322,7 +327,7 @@ if __name__ == "__main__":
         modules[path] = module
 
     slo_log = None
-    if os.path.exists(os.path.join(results_dir, "sim_logs/nexus_task_slo_log.json")):
+    if modules[gcfg_path].SLO_TYPE == "NEXUS":
         slo_log = json.load(open(os.path.join(results_dir, "sim_logs/nexus_task_slo_log.json")))
         slo_log = {int(k1): {int(k2): v2 for k2, v2 in v1.items()} for k1, v1 in slo_log.items()}
 
