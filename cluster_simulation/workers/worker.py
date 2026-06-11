@@ -190,13 +190,14 @@ class Worker(EventListener):
                                         kwargs={"job_task_ids": [(t.job.id, t.task_id) for t in filtered]}),
                                   self.emitter_id)
 
-        self.em.add_event(
-            Event(time, 
-                  EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
-                  kwargs={"batch": Batch(filtered), 
-                          "model_instance_id": instance_id, 
-                          "worker_id": self.id}),
-            self.emitter_id)
+        if filtered:
+            self.em.add_event(
+                Event(time, 
+                    EVENT_TYPES[EventIds.BATCH_STARTED_AT_WORKER],
+                    kwargs={"batch": Batch(filtered), 
+                            "model_instance_id": instance_id, 
+                            "worker_id": self.id}),
+                self.emitter_id)
 
 
     def on_tasks_ready(self, time: float, tasks: list[Task]):
