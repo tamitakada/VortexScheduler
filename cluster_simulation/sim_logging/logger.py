@@ -53,6 +53,7 @@ class Logger(EventListener):
                                               "is_active"])
         
         self.unfinished_jobs: list[Job] = []
+        self.dropped_jobs: dict[int, tuple[int, float]] = {}
 
         model_ids = sorted(set(m.id for w in self.workflows.values() for m in w.get_models()))
         self.unfinished_tasks: dict[int, list[tuple[int, int]]] = {mid: [] for mid in model_ids}
@@ -94,7 +95,9 @@ class Logger(EventListener):
                     "model_id": task.model_data.id, "workflow_id": task.job.job_type_id, "executing_worker_id": "N/A",
                     "arrival_at_scheduler_timestamp": event.time, "last_dep_dispatch_timestamp": np.nan,
                     "arrival_at_worker_timestamp": np.nan, "execution_start_timestamp": np.nan, 
-                    "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan, "dropped_at_task_id": np.nan,
+                    "execution_end_timestamp": np.nan, 
+                    "dropped_timestamp": self.dropped_jobs[task.job.id][0] if task.job.id in self.dropped_jobs else np.nan,
+                    "dropped_at_task_id": self.dropped_jobs[task.job.id][1] if task.job.id in self.dropped_jobs else np.nan,
                     "curr_unfinished_jobs": len(self.unfinished_jobs), 
                     "curr_idle_instances": self._get_curr_idle_instances(event.time),
                     "executing_worker_qlen_at_arrival": np.nan
@@ -148,7 +151,9 @@ class Logger(EventListener):
                         "executing_worker_id":  event.kwargs["worker_id"],
                         "arrival_at_scheduler_timestamp": np.nan, "last_dep_dispatch_timestamp": np.nan,
                         "arrival_at_worker_timestamp": event.time, "execution_start_timestamp": np.nan, 
-                        "execution_end_timestamp": np.nan, "dropped_timestamp": np.nan, "dropped_at_task_id": np.nan,
+                        "execution_end_timestamp": np.nan, 
+                        "dropped_timestamp": self.dropped_jobs[task.job.id][0] if task.job.id in self.dropped_jobs else np.nan,
+                        "dropped_at_task_id": self.dropped_jobs[task.job.id][1] if task.job.id in self.dropped_jobs else np.nan,
                         "curr_unfinished_jobs": len(self.unfinished_jobs), 
                         "curr_idle_instances": self._get_curr_idle_instances(event.time),
                         "executing_worker_qlen_at_arrival": np.nan
@@ -243,8 +248,10 @@ class Logger(EventListener):
 
             mask = (self.worker_log["instance_id"]==event.kwargs["model_instance_id"]) & \
                     (self.worker_log["execution_start_timestamp"] <= event.time) & \
-                    (self.worker_log["execution_end_timestamp"]==np.nan)
+                    (self.worker_log["execution_end_timestamp"].isna()) & \
+                    (self.worker_log["preempted_timestamp"].isna())
             
+            assert(len(self.worker_log.loc[mask]) == 1)
             self.worker_log.loc[mask, "preempted_timestamp"] = event.time
 
             for task in tasks:
@@ -255,6 +262,7 @@ class Logger(EventListener):
             
         elif event.type.id == EventIds.JOBS_DROPPED:
             for job_id, task_id in event.kwargs["job_task_ids"]:
+                self.dropped_jobs[job_id] = (event.time, task_id)
                 self.unfinished_jobs = [j for j in self.unfinished_jobs if j.id != job_id]
                 self.task_log.loc[self.task_log["job_id"]==job_id, "dropped_timestamp"] = event.time
                 self.task_log.loc[self.task_log["job_id"]==job_id, "dropped_at_task_id"] = task_id

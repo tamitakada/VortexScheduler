@@ -165,9 +165,11 @@ class LogVerifier:
         for _, row in self.work_log.iterrows():
             mask = ((self.batch_log["instance_id"]==row["instance_id"]) & 
                     (self.batch_log["execution_start_timestamp"] < row["time"]) &
-                    (self.batch_log["execution_end_timestamp"] > row["time"]))
+                    ((self.batch_log["execution_end_timestamp"] > row["time"]) |
+                     (self.batch_log["preempted_timestamp"] > row["time"])))
 
             assert(len(self.batch_log[mask]) <= 1)
+
             assert(row["is_active"] == (not self.batch_log[mask].empty))
 
         print("[PASS] Work log activity column verification")
