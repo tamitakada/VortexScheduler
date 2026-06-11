@@ -187,7 +187,7 @@ class Worker(EventListener):
             if dropped:
                 self.em.add_event(Event(time, 
                                         EVENT_TYPES[EventIds.JOBS_DROPPED], 
-                                        kwargs={"job_task_ids": [(t.job.id, t.task_id) for t in filtered]}),
+                                        kwargs={"job_task_ids": [(t.job.id, t.task_id) for t in dropped]}),
                                   self.emitter_id)
 
         if filtered:
