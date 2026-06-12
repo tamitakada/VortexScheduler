@@ -55,6 +55,7 @@ class LiveVerifier(EventListener):
 
         self.task_send_queue: dict[tuple[int, int], tuple[float, UUID]] = {} # -> (expected arrival time, worker ID)
         self.task_exec_queue: dict[tuple[int, int], tuple[float, UUID]] = {} # -> (expected exec start time, instance ID)
+        self.dropped_job_ids: set[int] = set()
 
         self.em.register_listener(self, {
             EVENT_TYPES[EventIds.JOB_SENT_TO_SCHEDULER],
@@ -102,8 +103,9 @@ class LiveVerifier(EventListener):
                 
                 # expect tasks to be executed immediately
                 for task in event.kwargs["tasks"]:
-                    self.task_exec_queue[(task.job.id, task.task_id)] = (
-                        event.time, event.kwargs["force_instance_id"])
+                    if task.job.id not in self.dropped_job_ids:
+                        self.task_exec_queue[(task.job.id, task.task_id)] = (
+                            event.time, event.kwargs["force_instance_id"])
             
             elif gcfg.DISPATCH_POLICY == "ROUND_ROBIN":
                 for task in event.kwargs["tasks"]:
@@ -115,6 +117,9 @@ class LiveVerifier(EventListener):
                     
                     # if an idle instance exists, task should be executed immediately
                     for iid in self.worker_id_to_instances[event.kwargs["to_worker_id"]]:
+                        if task.job.id in self.dropped_job_ids:
+                            continue
+
                         if iid in relevant_instances and self.instance_states[iid] == None:
                             self.task_exec_queue[(task.job.id, task.task_id)] = (event.time, None)
                     
@@ -217,6 +222,14 @@ class LiveVerifier(EventListener):
             assert(all(self.task_log[(job.id, task_id)]["exec_end_time"] >= 0 and \
                        self.task_log[(job.id, task_id)]["exec_end_time"] <= event.time 
                        for task_id in range(len(workflow_cfgs[job.job_type_id]["TASKS"]))))
+            
+        elif event.type.id == EventIds.JOBS_DROPPED:
+            for jid, tid in event.kwargs["job_task_ids"]:
+                assert(jid not in self.dropped_job_ids)
+                self.dropped_job_ids.add(jid)
+            
+                if (jid, tid) in self.task_exec_queue:
+                    self.task_exec_queue.pop((jid, tid))
             
 
     def is_sampled_correctly(self, x, mu, cv):
