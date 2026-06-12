@@ -161,7 +161,22 @@ class ShepherdScheduler(Scheduler):
     
 
     def on_jobs_dropped(self, time: float, job_task_ids: list[tuple[int, int]]):
-        pass
+        # update scheduled batch states in case all jobs in a batch get dropped,
+        # freeing the instance
+        for k, scheduled_batch in self.scheduled_batch_to_instance.items():
+            if scheduled_batch == None:
+                continue
+
+            # if worker is alr. executing outdated batch, DON'T update state
+            curr_state = self.workers[k[0]].GPU_state.get_instance_state(k[1], time)
+            if curr_state.reserved_batch and \
+                sorted([(t.job.id, t.task_id) for t in curr_state.reserved_batch.tasks]) == \
+                sorted(scheduled_batch):
+
+                continue
+
+            updated_batch = [x for x in scheduled_batch if x not in job_task_ids]
+            self.scheduled_batch_to_instance[k] = updated_batch if updated_batch else None
     
 
     def on_batch_start(self, time, batch, worker_id, instance_id):
